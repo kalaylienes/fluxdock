@@ -137,13 +137,13 @@ touching anything they care about. It hides during fullscreen by default anyway.
 
 ## Performance
 
-Measured over 90 seconds on a release build while a coding session was actively
-writing transcripts, which is the worst case for the file watcher:
+Measured on a release build while a coding session was actively writing
+transcripts, which is the worst case for the file watcher:
 
 | Metric | Measured |
 | --- | --- |
-| CPU, share of the whole system | 0.009% |
-| Resident memory | 56 MB |
+| CPU, share of the whole system | under 0.03% |
+| Resident memory | 30 to 60 MB |
 | Installer | 2.4 MB |
 
 Bar animation runs entirely on the compositor. The fill is drawn with two
