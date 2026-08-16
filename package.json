@@ -1,0 +1,59 @@
+{
+  "name": "fluxdock",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Windows widget that shows Claude Code and Codex CLI usage for the 5 hour and weekly limit windows, either floating above the taskbar or pinned into it.",
+  "license": "MIT",
+  "author": "kalaylienes",
+  "homepage": "https://github.com/kalaylienes/fluxdock",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kalaylienes/fluxdock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kalaylienes/fluxdock/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex-cli",
+    "usage-monitor",
+    "rate-limit",
+    "windows",
+    "taskbar-widget",
+    "floating-widget",
+    "desktop-widget",
+    "tauri",
+    "rust"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build",
+    "test": "playwright test",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "clsx": "^2.1.1",
+    "framer-motion": "^13.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwind-merge": "^3.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1"
+  }
+}

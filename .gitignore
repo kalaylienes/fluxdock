@@ -1,0 +1,10 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Local captures of a running widget, which show real account usage.
+tests/screenshots/
+test-results/
+playwright-report/
+*.log
