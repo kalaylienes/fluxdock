@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "FluxDock widget penceresi için minimum yetki kümesi",
+  "windows": ["widget"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:event:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }]
+    },
+    "notification:default"
+  ]
+}

@@ -1,0 +1,351 @@
+@import "tailwindcss";
+
+/* Colour tokens. Components never carry a literal colour; everything reads
+   from here so the two themes stay in step. The root element carries
+   data-theme, resolved on the Rust side from the Windows app theme. */
+
+:root,
+html[data-theme="dark"] {
+  --claude-from: #c15f3c;
+  --claude-to: #d97757;
+  /* The bright core in the middle of the fill. The contrast between the ends
+     and the core is what makes the band readable on a six pixel bar. */
+  --claude-core: #f0ae94;
+  --claude-glow: #d9775740;
+
+  --codex-from: #3b82f6;
+  --codex-to: #58a6ff;
+  --codex-core: #a5d2ff;
+  --codex-glow: #58a6ff40;
+
+  --surface: #1b1b1beb;
+  --track: #ffffff14;
+  --border: #ffffff1a;
+  --text-primary: #faf9f5;
+  --text-secondary: #faf9f599;
+  --warn: #f5b84e;
+  --danger: #ef5350;
+  --sheen: rgba(255, 255, 255, 0.55);
+}
+
+html[data-theme="light"] {
+  --claude-from: #c15f3c;
+  --claude-to: #d97757;
+  --claude-core: #eda588;
+  --claude-glow: #d9775726;
+
+  --codex-from: #2563eb;
+  --codex-to: #3b82f6;
+  --codex-core: #8cb8f7;
+  --codex-glow: #3b82f626;
+
+  --surface: #f7f7f5eb;
+  --track: #00000012;
+  --border: #00000014;
+  --text-primary: #141413;
+  --text-secondary: #14141380;
+  --warn: #b07d22;
+  --danger: #c62828;
+  --sheen: rgba(255, 255, 255, 0.85);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+* {
+  -webkit-user-drag: none;
+}
+
+.fd-shell {
+  height: 100vh;
+  width: 100vw;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+  display: flex;
+  overflow: hidden;
+  backdrop-filter: blur(14px);
+}
+
+/* The bar area needs an opaque, isolated backdrop. Without it the sweep's
+   screen blend mixes with the transparent window and disappears. */
+.fd-bars {
+  isolation: isolate;
+  background: var(--surface);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 8px 8px 2px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.fd-grip {
+  width: 6px;
+  flex: 0 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  cursor: grab;
+}
+.fd-shell:hover .fd-grip {
+  opacity: 0.55;
+}
+.fd-grip:active {
+  cursor: grabbing;
+}
+.fd-grip-dots {
+  width: 2px;
+  height: 22px;
+  border-radius: 1px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--text-secondary) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.fd-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Taskbar placement. The strip is around 48px tall, so each provider becomes a
+   narrow column with both windows stacked and the columns sit side by side. */
+
+.fd-shell[data-placement="taskbar"] {
+  border-radius: 6px;
+}
+
+.fd-shell[data-placement="taskbar"] .fd-bars {
+  padding: 3px 6px;
+}
+
+.fd-columns {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+}
+
+.fd-column {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.fd-column + .fd-column {
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.fd-column .fd-row {
+  gap: 4px;
+}
+
+.fd-column .fd-label {
+  flex: 0 0 16px;
+  width: 16px;
+}
+
+.fd-column .fd-pct {
+  flex: 0 0 30px;
+  width: 30px;
+}
+
+.fd-column-empty {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+
+.fd-column-empty-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Row anatomy: mark, label, bar, percentage, countdown. */
+
+.fd-group + .fd-group {
+  margin-top: 6px;
+}
+
+.fd-row {
+  height: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+.fd-row + .fd-row {
+  margin-top: 2px;
+}
+
+.fd-logo {
+  flex: 0 0 10px;
+  width: 10px;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fd-label {
+  flex: 0 0 22px;
+  width: 22px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fd-pct {
+  flex: 0 0 42px;
+  width: 42px;
+  text-align: right;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.fd-est {
+  font-size: 7px;
+  vertical-align: super;
+  color: var(--text-secondary);
+  margin-left: 1px;
+  font-weight: 400;
+}
+
+.fd-countdown {
+  flex: 0 0 44px;
+  width: 44px;
+  text-align: right;
+}
+
+.fd-warn {
+  color: var(--warn);
+}
+.fd-danger {
+  color: var(--danger);
+}
+
+.fd-track-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 6px;
+}
+
+.fd-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.fd-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: var(--track);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+html[data-theme="light"] .fd-track {
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.09),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.fd-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  will-change: transform;
+}
+
+.fd-fill {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.fd-sheen {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 3px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%, var(--sheen) 50%, transparent 100%);
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+.fd-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 15px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.fd-status-strip {
+  border-radius: 4px;
+  padding: 0 6px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  font-size: 9px;
+}
+
+.fd-link {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.fd-onboard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.fd-onboard-title {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+}
