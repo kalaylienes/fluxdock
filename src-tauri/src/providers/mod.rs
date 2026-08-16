@@ -60,3 +60,47 @@ pub fn quiet_command(program: &str) -> std::process::Command {
     }
     cmd
 }
+
+/// Runs a CLI entry point.
+///
+/// npm installs both a shell script and a `.cmd` shim under the same name.
+/// `CreateProcess` cannot execute either directly, so batch shims go through
+/// the command interpreter.
+pub fn cli_command(path: &str) -> std::process::Command {
+    let lower = path.to_ascii_lowercase();
+    if cfg!(windows) && (lower.ends_with(".cmd") || lower.ends_with(".bat")) {
+        let mut cmd = quiet_command("cmd");
+        cmd.arg("/C").arg(path);
+        cmd
+    } else {
+        quiet_command(path)
+    }
+}
+
+/// Picks an entry point Windows can actually launch.
+///
+/// `where` lists the extensionless shell script first, which fails with
+/// "not a valid Win32 application", so executable extensions win.
+#[cfg(windows)]
+pub fn resolve_on_path(name: &str) -> Option<String> {
+    let out = quiet_command("where").arg(name).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let candidates: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+
+    candidates
+        .iter()
+        .find(|l| {
+            let lower = l.to_ascii_lowercase();
+            lower.ends_with(".exe") || lower.ends_with(".cmd") || lower.ends_with(".bat")
+        })
+        .or(candidates.first())
+        .map(|s| s.to_string())
+}
+
+#[cfg(not(windows))]
+pub fn resolve_on_path(_name: &str) -> Option<String> {
+    None
+}

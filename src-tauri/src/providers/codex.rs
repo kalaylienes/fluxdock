@@ -13,7 +13,7 @@ use chrono::{DateTime, Duration, Utc};
 use crate::model::{
     ProviderSnapshot, ProviderStatus, Source, TokenTotals, WindowKind, WindowSnapshot,
 };
-use crate::providers::{blocking, quiet_command, UsageProvider};
+use crate::providers::{blocking, cli_command, resolve_on_path, UsageProvider};
 use crate::settings::CodexSettings;
 
 const INSTALL_URL: &str = "https://developers.openai.com/codex/cli/";
@@ -121,7 +121,7 @@ impl CodexProvider {
     /// session, but it starts a process, so it is used sparingly.
     fn app_server_snapshot(&self) -> Option<RateSnapshot> {
         let bin = resolve_codex_binary()?;
-        let mut child = quiet_command(&bin)
+        let mut child = cli_command(&bin)
             .arg("app-server")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -446,19 +446,8 @@ fn epoch_to_utc(v: i64) -> Option<DateTime<Utc>> {
 }
 
 fn resolve_codex_binary() -> Option<String> {
-    #[cfg(windows)]
-    {
-        if let Ok(out) = quiet_command("where").arg("codex").output() {
-            if out.status.success() {
-                if let Some(line) = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .map(str::trim)
-                    .find(|l| !l.is_empty())
-                {
-                    return Some(line.to_string());
-                }
-            }
-        }
+    if let Some(found) = resolve_on_path("codex") {
+        return Some(found);
     }
     let home = dirs::home_dir()?;
     [

@@ -15,7 +15,7 @@ use crate::model::{
     ProviderSnapshot, ProviderStatus, Source, TokenTotals, WindowKind, WindowSnapshot,
 };
 use crate::net::build_client;
-use crate::providers::{blocking, quiet_command, UsageProvider};
+use crate::providers::{blocking, cli_command, resolve_on_path, UsageProvider};
 use crate::settings::ClaudeSettings;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -235,7 +235,7 @@ impl ClaudeProvider {
                 return false;
             };
             tracing::info!("asking the CLI to refresh its token");
-            let mut cmd = quiet_command(&bin);
+            let mut cmd = cli_command(&bin);
             cmd.args(["-p", "."]);
             match cmd.spawn() {
                 Ok(mut child) => {
@@ -668,7 +668,7 @@ fn parse_usage(body: &serde_json::Value) -> Option<Official> {
 
 fn detect_version() -> Option<String> {
     let bin = resolve_claude_binary()?;
-    let out = quiet_command(&bin).arg("--version").output().ok()?;
+    let out = cli_command(&bin).arg("--version").output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     text.split_whitespace()
         .find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()) && t.contains('.'))
@@ -676,19 +676,8 @@ fn detect_version() -> Option<String> {
 }
 
 fn resolve_claude_binary() -> Option<String> {
-    #[cfg(windows)]
-    {
-        if let Ok(out) = quiet_command("where").arg("claude").output() {
-            if out.status.success() {
-                if let Some(line) = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .map(str::trim)
-                    .find(|l| !l.is_empty())
-                {
-                    return Some(line.to_string());
-                }
-            }
-        }
+    if let Some(found) = resolve_on_path("claude") {
+        return Some(found);
     }
 
     let home = dirs::home_dir()?;
