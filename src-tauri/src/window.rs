@@ -322,15 +322,17 @@ fn apply_fullscreen_hiding(app: &AppHandle, fullscreen: bool, stable_clear: bool
     }
 }
 
-/// Reclaims the top of the topmost band when the shell has covered the widget.
+/// Reclaims the top of the topmost band when something has covered the widget.
 ///
-/// In taskbar placement both windows are topmost and the shell raises its own
-/// whenever the user touches the strip, the Start menu, or the notification
-/// area. Being topmost is not enough on its own; position within that band has
-/// to be taken back. The cheap check first means the window is only restacked
-/// when it is actually obscured, which avoids fighting other topmost windows.
+/// The toolkit's always-on-top setter is a no-op here: the flag is set when the
+/// window is created, so the call returns before it reaches the platform. That
+/// left the widget with no way to recover its stacking position. The shell
+/// raises its own window whenever the taskbar, Start menu or notification area
+/// is touched, and in taskbar placement that leaves the widget behind an opaque
+/// strip. Checking first means the window is only restacked when it is really
+/// obscured, so other topmost windows are not fought for no reason.
 #[cfg(windows)]
-fn ensure_above_taskbar(app: &AppHandle) {
+fn ensure_on_top(app: &AppHandle) {
     use windows::Win32::Foundation::{POINT, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
         GetAncestor, GetWindowRect, SetWindowPos, WindowFromPoint, GA_ROOT, HWND_TOPMOST,
@@ -375,7 +377,7 @@ fn ensure_above_taskbar(app: &AppHandle) {
 }
 
 #[cfg(not(windows))]
-fn ensure_above_taskbar(_app: &AppHandle) {}
+fn ensure_on_top(_app: &AppHandle) {}
 
 /// Keeps taskbar placement visible when it should be.
 ///
@@ -455,7 +457,6 @@ pub fn spawn_reconciler(app: AppHandle) {
                 }
                 if taskbar_mode {
                     reconcile_taskbar_visibility(&app);
-                    ensure_above_taskbar(&app);
                 }
             }
 
@@ -470,6 +471,12 @@ pub fn spawn_reconciler(app: AppHandle) {
                 .unwrap_or(false);
 
             apply_fullscreen_hiding(&app, fullscreen, stable_clear);
+
+            // Nothing to reclaim while a real fullscreen application is in
+            // front; the widget is meant to be out of the way then.
+            if !fullscreen {
+                ensure_on_top(&app);
+            }
 
             let visible = widget(&app).and_then(|w| w.is_visible().ok()).unwrap_or(false);
             let motion = visible && !power_saver() && !fullscreen;
