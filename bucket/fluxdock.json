@@ -1,10 +1,10 @@
 {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Windows widget for Claude Code and Codex CLI usage, floating above the taskbar or pinned into it",
     "homepage": "https://github.com/kalaylienes/fluxdock",
     "license": "GPL-3.0-or-later",
-    "url": "https://github.com/kalaylienes/fluxdock/releases/download/v1.0.0/FluxDock-1.0.0-portable-x64.zip",
-    "hash": "75fa9a8a7d4d48fe025905287002c80b96cd95d558ad1586c268cea3ef4e714a",
+    "url": "https://github.com/kalaylienes/fluxdock/releases/download/v1.0.1/FluxDock-1.0.1-portable-x64.zip",
+    "hash": "fb20632be68c98e6655443822824d1205cbcd1f63f5bec31fee6f1172e237366",
     "bin": "fluxdock.exe",
     "shortcuts": [
         [
