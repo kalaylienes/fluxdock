@@ -49,15 +49,34 @@ question is answered before you ask it.
 
 ## Install
 
-Download the installer from the
-[releases page](https://github.com/kalaylienes/fluxdock/releases) and run it. It
-installs per user, so no administrator prompt, and it fetches the WebView2
-runtime if the machine does not already have it.
+One line, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/kalaylienes/fluxdock/main/scripts/install.ps1 | iex
+```
+
+It downloads the latest installer from the releases page and runs it silently.
+Per user install, no administrator prompt, fetches the WebView2 runtime if the
+machine does not already have it.
+
+Already using [Scoop](https://scoop.sh)?
+
+```powershell
+scoop bucket add fluxdock https://github.com/kalaylienes/fluxdock
+scoop install fluxdock
+```
+
+Or grab the installer or a portable zip by hand from the
+[releases page](https://github.com/kalaylienes/fluxdock/releases).
 
 Requirements: Windows 10 or 11.
 
 Nothing to configure afterwards. If Claude Code or Codex CLI is signed in, the
 bars fill within a few seconds of the first launch.
+
+The binary is not code signed yet, so Windows SmartScreen will warn on first
+run. Choose **More info**, then **Run anyway**, or build it yourself from
+source below and judge the code directly.
 
 ## Using it
 
