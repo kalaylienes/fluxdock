@@ -224,7 +224,13 @@ Issues and pull requests are welcome. Two things worth knowing:
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+The source is fully open: read it, modify it, fork it, build it yourself,
+submit changes back. The GPL's copyleft term is what it adds over a permissive
+license — anyone who distributes this software, modified or not, including
+commercially, must keep the source available under the same terms. A closed,
+proprietary resale is not permitted.
 
 FluxDock is an independent project and is not affiliated with, endorsed by, or
 sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of

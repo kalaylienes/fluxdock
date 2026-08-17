@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "description": "Windows widget that shows Claude Code and Codex CLI usage for the 5 hour and weekly limit windows, either floating above the taskbar or pinned into it.",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "author": "kalaylienes",
   "homepage": "https://github.com/kalaylienes/fluxdock",
   "repository": {
