@@ -33,8 +33,9 @@
     "tauri": "tauri",
     "app:dev": "tauri dev",
     "app:build": "tauri build",
-    "test": "playwright test",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib"
+    "test": "playwright test --project=suite",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
+    "docs:shots": "playwright test --project=docs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

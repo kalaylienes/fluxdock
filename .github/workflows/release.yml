@@ -1,0 +1,64 @@
+name: Release
+
+# Pushing a version tag produces the artefacts. The release itself is left as a
+# draft: the notes are worth writing by hand, and a draft can be thrown away
+# without anyone having downloaded the wrong thing.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and draft
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Build the bundle
+        run: npm run tauri build
+
+      - name: Check the tag against the manifest
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}" -replace '^v', ''
+          $manifest = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($tag -ne $manifest) {
+            throw "tag $tag does not match tauri.conf.json $manifest"
+          }
+          "VERSION=$tag" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Package the portable build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-portable | Out-Null
+          Copy-Item src-tauri/target/release/fluxdock.exe dist-portable/fluxdock.exe -Force
+          $zip = "dist-portable/FluxDock-$env:VERSION-portable-x64.zip"
+          Compress-Archive -Path dist-portable/fluxdock.exe -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "ZIP=$zip" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          # The Scoop manifest carries this hash, so it has to be easy to find.
+          "Portable zip SHA256: ``$hash``" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Draft the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = "src-tauri/target/release/bundle/nsis/FluxDock_${env:VERSION}_x64-setup.exe"
+          gh release create "${{ github.ref_name }}" --draft --title "FluxDock $env:VERSION" --notes "Draft. Write the notes, check the Scoop hash in the run summary, then publish." $setup $env:ZIP
