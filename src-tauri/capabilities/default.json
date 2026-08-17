@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "FluxDock widget penceresi için minimum yetki kümesi",
+  "description": "Minimum permission set for the FluxDock widget window",
   "windows": ["widget"],
   "permissions": [
     "core:default",
