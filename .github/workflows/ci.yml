@@ -16,11 +16,15 @@ permissions:
 jobs:
   frontend:
     name: Frontend
-    runs-on: ubuntu-latest
+    # Windows, not Linux. Part of the suite measures whether the numbers still
+    # fit their cells, and that depends on the font: without Segoe UI the
+    # fallback is wider and "100%est*" overflows a box it fits on the machines
+    # this widget actually runs on.
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -31,7 +35,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Install the browser
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Test
         run: npm test
@@ -43,9 +47,9 @@ jobs:
     name: Rust
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
