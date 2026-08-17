@@ -120,6 +120,12 @@ impl CodexProvider {
     /// Asks the app server directly. Version stable and needs no interactive
     /// session, but it starts a process, so it is used sparingly.
     fn app_server_snapshot(&self) -> Option<RateSnapshot> {
+        // Starting a process while a game is in front can flash a console window
+        // over it, and that is enough to knock it out of fullscreen. Codex is
+        // not running during a game anyway, so there is nothing new to read.
+        if crate::window::fullscreen_now() {
+            return None;
+        }
         let bin = resolve_codex_binary()?;
         let mut child = cli_command(&bin)
             .arg("app-server")
@@ -219,7 +225,7 @@ impl UsageProvider for CodexProvider {
         self.sessions_dir().into_iter().filter(|p| p.exists()).collect()
     }
 
-    async fn poll(&mut self, force: bool) -> ProviderSnapshot {
+    async fn poll(&mut self, _force: bool) -> ProviderSnapshot {
         if !self.installed() {
             let mut snap = ProviderSnapshot::empty("codex", "Codex CLI");
             snap.status = ProviderStatus::CliNotFound;
@@ -239,9 +245,13 @@ impl UsageProvider for CodexProvider {
             .as_ref()
             .map(|s| Utc::now() - s.at >= Duration::hours(5))
             .unwrap_or(true);
+        // The cooldown holds for a forced refresh too. `force` is set on every
+        // timer tick, not just on a user request, so honouring it here meant a
+        // process every poll interval for as long as the rollouts stayed stale,
+        // which is exactly the case where they never stop being stale.
         let cooled = self.next_app_server.map(|t| Utc::now() >= t).unwrap_or(true);
 
-        let fresh = if rollout_stale && (force || cooled) {
+        let fresh = if rollout_stale && cooled {
             self.next_app_server = Some(Utc::now() + Duration::minutes(APP_SERVER_COOLDOWN_MINS));
             blocking(|| self.app_server_snapshot()).or(fresh)
         } else {

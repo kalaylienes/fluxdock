@@ -222,6 +222,12 @@ impl ClaudeProvider {
         if !self.settings.allow_cli_refresh {
             return false;
         }
+        // Starting a process while a game is in front can flash a console window
+        // over it, and that is enough to knock it out of fullscreen. A token
+        // that is already expired can wait until the game is over.
+        if crate::window::fullscreen_now() {
+            return false;
+        }
         let now = Utc::now();
         if let Some(last) = self.last_refresh_attempt {
             if now - last < Duration::minutes(REFRESH_COOLDOWN_MINS) {

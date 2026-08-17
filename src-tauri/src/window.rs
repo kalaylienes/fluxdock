@@ -19,9 +19,13 @@ const TICK: std::time::Duration = std::time::Duration::from_millis(350);
 /// How many ticks between topology scans in floating mode, roughly two seconds.
 const TOPOLOGY_EVERY: u32 = 6;
 
-/// Fullscreen state oscillates for a few hundred milliseconds while a game
-/// enters or leaves, so restoring is delayed.
-const RESTORE_DELAY: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Fullscreen state oscillates while a game enters or leaves, and anything that
+/// flashes in front of it breaks the signal for a moment: a scheduled task, an
+/// installer, a console window. Restoring the widget in that gap raises a
+/// topmost window over the game, which costs an exclusive fullscreen game its
+/// mode and drops the player to the desktop. The delay is therefore longer than
+/// any flash can hold the foreground.
+const RESTORE_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 
 static MOVE_TICKET: AtomicU64 = AtomicU64::new(0);
 
@@ -32,6 +36,61 @@ static SUPPRESS_MOVES_UNTIL: AtomicU64 = AtomicU64::new(0);
 /// Hidden because of a fullscreen application, as opposed to the user's own
 /// visibility preference.
 static AUTO_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+/// Whether a fullscreen application is in front right now, published for the
+/// providers. Spawning a process during a game can flash a console window over
+/// it, and that flash alone is enough to knock the game out of fullscreen, so
+/// every path that starts one checks this first.
+static FULLSCREEN_NOW: AtomicBool = AtomicBool::new(false);
+
+/// The window last seen covering its monitor, kept as the raw pointer value.
+/// A game that loses the foreground for a moment is still a game.
+#[cfg(windows)]
+static LAST_FULLSCREEN_HWND: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+
+/// Set when the user asks for the widget while something fullscreen is in front.
+/// Their request wins until that application goes away.
+static SHOWN_ON_PURPOSE: AtomicBool = AtomicBool::new(false);
+
+/// Height the interface last reported needing, in logical pixels, stored as
+/// hundredths so it fits an integer. Zero means it has not measured itself yet.
+static MEASURED_HEIGHT: AtomicU64 = AtomicU64::new(0);
+
+/// Takes the height the interface measured for its own content and resizes the
+/// floating window to match. Taskbar placement ignores it: there the height is
+/// the strip's, not the content's.
+pub fn set_content_height(app: &AppHandle, logical_h: f64) {
+    if !logical_h.is_finite() || logical_h <= 0.0 {
+        return;
+    }
+    let hundredths = (logical_h * 100.0).round() as u64;
+    if MEASURED_HEIGHT.swap(hundredths, Ordering::SeqCst) == hundredths {
+        return;
+    }
+    reposition(app);
+}
+
+/// What the floating window should be, in logical pixels.
+fn floating_height() -> f64 {
+    #[cfg(windows)]
+    {
+        let stored = MEASURED_HEIGHT.load(Ordering::SeqCst);
+        if stored == 0 {
+            crate::monitor::DEFAULT_LOGICAL_H
+        } else {
+            stored as f64 / 100.0
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        0.0
+    }
+}
+
+pub fn fullscreen_now() -> bool {
+    FULLSCREEN_NOW.load(Ordering::Relaxed)
+}
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -97,9 +156,14 @@ pub fn reposition(app: &AppHandle) {
         let (x, y, w, h) = match taskbar_target {
             Some(t) => t,
             None => {
-                let (tx, ty, w, h) =
-                    monitor::target_position(&mon, s.widget.edge_offset_x, s.widget.edge_offset_y);
-                let (x, y, w, h) = monitor::clamp_or_primary(tx, ty, w, h);
+                let logical_h = floating_height();
+                let (tx, ty, w, h) = monitor::target_position(
+                    &mon,
+                    s.widget.edge_offset_x,
+                    s.widget.edge_offset_y,
+                    logical_h,
+                );
+                let (x, y, w, h) = monitor::clamp_or_primary(tx, ty, w, h, logical_h);
 
                 // If the clamp had to step in, the stored offset is invalid and
                 // would keep producing the same wrong target.
@@ -196,7 +260,7 @@ fn finalize_move(app: &AppHandle) {
         return;
     }
 
-    let (base_x, base_y, _, _) = monitor::target_position(&mon, 0, 0);
+    let (base_x, base_y, _, _) = monitor::target_position(&mon, 0, 0, floating_height());
     let snap = |d: i32| if d.abs() < OFFSET_NOISE_PX { 0 } else { d };
     let offset_x = snap(base_x - pos.x);
     let offset_y = snap(base_y - pos.y);
@@ -228,6 +292,18 @@ fn finalize_move(app: &AppHandle) {
 #[cfg(not(windows))]
 fn finalize_move(_app: &AppHandle) {}
 
+/// Shows the widget because the user asked for it, from the tray or by starting
+/// the app a second time. Whatever is in front, the answer to that is to show
+/// it, so this outranks fullscreen hiding until that application goes away.
+///
+/// Starting up is not such a request, which is why it calls `show` instead: an
+/// app that comes back mid game, through the watchdog for example, has to stay
+/// out of the way.
+pub fn show_by_request(app: &AppHandle) {
+    SHOWN_ON_PURPOSE.store(true, Ordering::SeqCst);
+    show(app);
+}
+
 pub fn show(app: &AppHandle) {
     let Some(win) = widget(app) else { return };
     AUTO_HIDDEN.store(false, Ordering::SeqCst);
@@ -250,7 +326,7 @@ pub fn toggle_visibility(app: &AppHandle) {
             .update(|s| s.widget.visible = false);
         crate::tray::rebuild(app);
     } else {
-        show(app);
+        show_by_request(app);
     }
 }
 
@@ -313,18 +389,76 @@ fn apply_fullscreen_hiding(app: &AppHandle, fullscreen: bool, stable_clear: bool
     let Some(win) = widget(app) else { return };
 
     if fullscreen {
+        // Asking for the widget outranks hiding it. Without this, showing it
+        // from the tray while something is detected as fullscreen puts it back
+        // within a third of a second, and the menu item looks broken with no
+        // way to tell why.
+        if SHOWN_ON_PURPOSE.load(Ordering::SeqCst) {
+            return;
+        }
         if !AUTO_HIDDEN.load(Ordering::SeqCst) && win.is_visible().unwrap_or(false) {
-            tracing::info!("fullscreen application detected, hiding the widget");
+            tracing::info!("hiding the widget behind {}", fullscreen_window_description());
             let _ = win.hide();
             AUTO_HIDDEN.store(true, Ordering::SeqCst);
         }
-    } else if stable_clear && AUTO_HIDDEN.swap(false, Ordering::SeqCst) && s.widget.visible {
-        tracing::info!("fullscreen ended, restoring the widget");
-        reposition(app);
-        let _ = win.show();
-        let _ = win.set_always_on_top(true);
-        apply_ex_styles(app);
+    } else if stable_clear {
+        // The override lasts for one fullscreen stretch, so the next game hides
+        // the widget again without the user having to undo anything.
+        SHOWN_ON_PURPOSE.store(false, Ordering::SeqCst);
+
+        if AUTO_HIDDEN.swap(false, Ordering::SeqCst) && s.widget.visible {
+            tracing::info!("fullscreen ended, restoring the widget");
+            reposition(app);
+            let _ = win.show();
+            let _ = win.set_always_on_top(true);
+            apply_ex_styles(app);
+        }
     }
+}
+
+/// What the widget is hiding behind, for the log. A hidden widget with no
+/// explanation is the hardest kind of fault to chase: it looks like the app is
+/// broken when it is doing exactly what it was told.
+#[cfg(windows)]
+fn fullscreen_window_description() -> String {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowRect, GetWindowTextW};
+
+    let raw = LAST_FULLSCREEN_HWND.load(Ordering::SeqCst);
+    if raw == 0 {
+        return "an unidentified fullscreen window".into();
+    }
+    let hwnd = HWND(raw as *mut std::ffi::c_void);
+
+    unsafe {
+        let mut class = [0u16; 128];
+        let len = GetClassNameW(hwnd, &mut class);
+        let class = String::from_utf16_lossy(&class[..(len.max(0) as usize).min(class.len())]);
+
+        let mut title = [0u16; 128];
+        let len = GetWindowTextW(hwnd, &mut title);
+        let title = String::from_utf16_lossy(&title[..(len.max(0) as usize).min(title.len())]);
+
+        let mut rect = RECT::default();
+        let geometry = if GetWindowRect(hwnd, &mut rect).is_ok() {
+            format!(
+                "{},{} {}x{}",
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top
+            )
+        } else {
+            "unknown geometry".into()
+        };
+
+        format!("{class} \"{title}\" at {geometry}")
+    }
+}
+
+#[cfg(not(windows))]
+fn fullscreen_window_description() -> String {
+    "a fullscreen window".into()
 }
 
 /// Reclaims the top of the topmost band when something has covered the widget.
@@ -438,8 +572,13 @@ pub fn spawn_reconciler(app: AppHandle) {
             tokio::time::sleep(TICK).await;
             tick = tick.wrapping_add(1);
 
+            // Read first, because everything below either skips itself or waits
+            // while a game is in front.
+            let fullscreen = fullscreen_active();
+            FULLSCREEN_NOW.store(fullscreen, Ordering::Relaxed);
+
             #[cfg(windows)]
-            {
+            if !fullscreen {
                 let taskbar_mode = app
                     .state::<Arc<AppState>>()
                     .settings
@@ -447,7 +586,10 @@ pub fn spawn_reconciler(app: AppHandle) {
                     .widget
                     .taskbar_mode();
                 // The topology scan calls QueryDisplayConfig, so it does not run
-                // on every tick unless the strip itself has to be tracked.
+                // on every tick unless the strip itself has to be tracked. It is
+                // skipped entirely during a game: placement cannot be applied
+                // then anyway, and leaving the signature untouched means the
+                // first tick afterwards still notices anything that moved.
                 if taskbar_mode || tick % TOPOLOGY_EVERY == 0 {
                     let signature = topology_signature(&app);
                     if signature != last_signature {
@@ -465,7 +607,6 @@ pub fn spawn_reconciler(app: AppHandle) {
                 }
             }
 
-            let fullscreen = fullscreen_active();
             if fullscreen {
                 clear_since = None;
             } else if clear_since.is_none() {
@@ -540,37 +681,110 @@ fn power_saver() -> bool {
 
 /// Fullscreen detection.
 ///
-/// Two independent signals are combined. The shell reports exclusive fullscreen
-/// reliably but usually stays quiet for borderless windowed games, so the
-/// foreground window is measured against its monitor as well.
+/// Everything here comes from window geometry: the foreground window is measured
+/// against its monitor, and because a game keeps running when something else
+/// briefly takes the foreground, the window last seen filling its monitor is
+/// remembered and rechecked. Without that second part, a window flashing for a
+/// fraction of a second reads as "the game ended" and the widget climbs back
+/// over it.
 ///
-/// Both only read window geometry. No other process is opened, no memory is
-/// read and nothing is injected anywhere.
+/// The shell is asked one narrow question on top of that, and only one. It used
+/// to be asked broadly, which is a mistake worth spelling out:
+/// `SHQueryUserNotificationState` answers "may I show a notification", not "is a
+/// game running". `QUNS_BUSY` and `QUNS_PRESENTATION_MODE` also cover do not
+/// disturb and presentation settings, and Windows turns do not disturb on by
+/// itself while gaming and leaves it on afterwards. The widget then stayed
+/// hidden with nothing on screen to explain it, and showing it from the tray was
+/// undone within a third of a second. Only `QUNS_RUNNING_D3D_FULL_SCREEN` is
+/// trusted now, because that one really does mean an exclusive fullscreen game.
+///
+/// Only window geometry and that one flag are read. No other process is opened,
+/// no memory is read and nothing is injected anywhere.
 #[cfg(windows)]
 fn fullscreen_active() -> bool {
-    use windows::Win32::UI::Shell::{
-        SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE,
-        QUNS_RUNNING_D3D_FULL_SCREEN,
+    use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_RUNNING_D3D_FULL_SCREEN};
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    if foreground_covers_monitor() {
+        return true;
+    }
+
+    let exclusive_d3d = unsafe {
+        SHQueryUserNotificationState()
+            .map(|state| state == QUNS_RUNNING_D3D_FULL_SCREEN)
+            .unwrap_or(false)
+    };
+    if exclusive_d3d {
+        // Such a game does not always measure as covering its monitor, so its
+        // window is remembered and rechecked like any other.
+        remember_fullscreen(unsafe { GetForegroundWindow() });
+        return true;
+    }
+
+    remembered_still_covers()
+}
+
+#[cfg(windows)]
+fn remember_fullscreen(hwnd: windows::Win32::Foundation::HWND) {
+    LAST_FULLSCREEN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+}
+
+/// Is the remembered window still open, unminimised and filling its monitor?
+///
+/// Alt tabbing out of a game must not be enough to bring the widget back over
+/// it. Closing or minimising the game is, and both are visible here: a closed
+/// window fails `IsWindow`, a minimised one reports a rectangle off screen.
+#[cfg(windows)]
+fn remembered_still_covers() -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow, IsWindowVisible};
+
+    let raw = LAST_FULLSCREEN_HWND.load(Ordering::SeqCst);
+    if raw == 0 {
+        return false;
+    }
+    let hwnd = HWND(raw as *mut std::ffi::c_void);
+
+    let still = unsafe {
+        IsWindow(Some(hwnd)).as_bool()
+            && IsWindowVisible(hwnd).as_bool()
+            && !IsIconic(hwnd).as_bool()
+            && covers_its_monitor(hwnd)
+    };
+    if !still {
+        LAST_FULLSCREEN_HWND.store(0, Ordering::SeqCst);
+    }
+    still
+}
+
+/// Does this window fill the monitor its centre sits on?
+#[cfg(windows)]
+unsafe fn covers_its_monitor(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return false;
+    }
+
+    let cx = rect.left + (rect.right - rect.left) / 2;
+    let cy = rect.top + (rect.bottom - rect.top) / 2;
+    let Some(mon) = crate::monitor::monitor_at(cx, cy) else {
+        return false;
     };
 
-    unsafe {
-        if let Ok(state) = SHQueryUserNotificationState() {
-            if state == QUNS_BUSY
-                || state == QUNS_RUNNING_D3D_FULL_SCREEN
-                || state == QUNS_PRESENTATION_MODE
-            {
-                return true;
-            }
-        }
-    }
-    foreground_covers_monitor()
+    let b = mon.bounds;
+    rect.left <= b.left + 2
+        && rect.top <= b.top + 2
+        && rect.right >= b.right - 2
+        && rect.bottom >= b.bottom - 2
 }
 
 #[cfg(windows)]
 fn foreground_covers_monitor() -> bool {
-    use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetForegroundWindow, GetWindowRect, IsWindowVisible,
+        GetClassNameW, GetForegroundWindow, IsWindowVisible,
     };
 
     unsafe {
@@ -611,22 +825,11 @@ fn foreground_covers_monitor() -> bool {
             }
         }
 
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
+        if !covers_its_monitor(hwnd) {
             return false;
         }
-
-        let cx = rect.left + (rect.right - rect.left) / 2;
-        let cy = rect.top + (rect.bottom - rect.top) / 2;
-        let Some(mon) = crate::monitor::monitor_at(cx, cy) else {
-            return false;
-        };
-
-        let b = mon.bounds;
-        rect.left <= b.left + 2
-            && rect.top <= b.top + 2
-            && rect.right >= b.right - 2
-            && rect.bottom >= b.bottom - 2
+        remember_fullscreen(hwnd);
+        true
     }
 }
 

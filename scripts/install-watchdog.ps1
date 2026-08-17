@@ -3,15 +3,22 @@
 #   powershell -ExecutionPolicy Bypass -File scripts/install-watchdog.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts/install-watchdog.ps1 -Remove
 #
-# The task starts FluxDock at sign in and checks every minute afterwards. If the
-# process is gone it starts it again. Task Scheduler is told never to run a
-# second copy, and FluxDock enforces single instance itself, so the check is a
-# no-op while it is already running.
+# The task starts FluxDock at sign in and checks every minute afterwards. The
+# check is fluxdock.exe itself, launched with --watchdog: FluxDock enforces
+# single instance, so the second copy hands its arguments to the running one and
+# exits within milliseconds, and starts the app when nothing is running.
 #
-# Quitting from the tray menu writes a marker that this task honours, so a
-# deliberate exit stays closed. Ending the process from Task Manager does not
-# write that marker and the widget comes back within a minute, which is the
-# point: an unexpected death should not need a human.
+# The task must not run a console program. A scheduled task that starts one gets
+# a real console window, and on a system where Windows Terminal is the default
+# host that window is visible no matter what -WindowStyle says. Once a minute it
+# would flash in front of everything, taking the foreground with it, which knocks
+# fullscreen games back to the desktop. fluxdock.exe is a GUI binary and has no
+# console to show.
+#
+# Quitting from the tray menu writes a marker that FluxDock honours on a
+# --watchdog launch, so a deliberate exit stays closed. Ending the process from
+# Task Manager does not write that marker and the widget comes back within a
+# minute, which is the point: an unexpected death should not need a human.
 
 param([switch]$Remove)
 
@@ -38,16 +45,7 @@ if (-not (Test-Path $exe)) {
     }
 }
 
-$marker = Join-Path $env:APPDATA "FluxDock\stay-closed"
-
-# Single quotes inside so the command is evaluated when the task runs.
-$command = @"
-if (-not (Test-Path '$marker')) { if (-not (Get-Process fluxdock -ErrorAction SilentlyContinue)) { Start-Process '$exe' } }
-"@
-$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-
-$action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -WindowStyle Hidden -EncodedCommand $encoded"
+$action = New-ScheduledTaskAction -Execute $exe -Argument "--watchdog"
 
 $atLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 

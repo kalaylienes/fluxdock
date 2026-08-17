@@ -159,6 +159,13 @@ It registers a scheduled task that starts FluxDock at sign in and checks once a
 minute afterwards. If the process is gone for any reason it comes back within
 the minute, without asking.
 
+The check is `fluxdock.exe --watchdog`, not a script. A scheduled task that
+starts a console program gets a real console window, and where Windows Terminal
+is the default host that window shows itself whatever `-WindowStyle` asks for.
+Once a minute it would flash in front of everything and take the foreground with
+it, which is enough to drop a fullscreen game to the desktop. A GUI binary has
+no console to flash.
+
 Quitting from the tray menu is treated as deliberate and the watchdog leaves it
 alone. Ending the process from Task Manager is not, so it restarts. To take the
 watchdog off again:

@@ -30,9 +30,17 @@ use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
 /// Not re-exported by the windows crate.
 const MONITORINFOF_PRIMARY: u32 = 1;
 
-/// Floating window size in logical pixels.
+/// Floating window width in logical pixels.
 pub const LOGICAL_W: f64 = 300.0;
-pub const LOGICAL_H: f64 = 88.0;
+
+/// Floating window height before the interface has measured itself. Two
+/// providers with two windows each, which is what a full install shows.
+pub const DEFAULT_LOGICAL_H: f64 = 88.0;
+
+/// Bounds for a measured height, so a broken measurement cannot produce a
+/// window that is invisible or takes over the screen.
+pub const MIN_LOGICAL_H: f64 = 24.0;
+pub const MAX_LOGICAL_H: f64 = 400.0;
 
 const MARGIN_X: f64 = 12.0;
 const MARGIN_Y: f64 = 8.0;
@@ -165,10 +173,20 @@ pub fn resolve(stable_id: Option<&str>) -> Option<(MonitorInfo, Resolution)> {
 }
 
 /// Bottom right of the work area, in physical pixels.
-pub fn target_position(monitor: &MonitorInfo, offset_x: i32, offset_y: i32) -> (i32, i32, i32, i32) {
+///
+/// The height is passed in rather than fixed, because what the widget shows
+/// decides how tall it has to be: one provider needs half of what two do, and a
+/// window sized for the larger case leaves the smaller one padded with dead
+/// space at both ends.
+pub fn target_position(
+    monitor: &MonitorInfo,
+    offset_x: i32,
+    offset_y: i32,
+    logical_h: f64,
+) -> (i32, i32, i32, i32) {
     let scale = monitor.scale();
     let w = (LOGICAL_W * scale).round() as i32;
-    let h = (LOGICAL_H * scale).round() as i32;
+    let h = (logical_h.clamp(MIN_LOGICAL_H, MAX_LOGICAL_H) * scale).round() as i32;
 
     let mut work = monitor.work;
 
@@ -205,7 +223,7 @@ pub fn target_position(monitor: &MonitorInfo, offset_x: i32, offset_y: i32) -> (
 
 /// Guarantees the window keeps at least half of its area on a work area,
 /// falling back to the primary corner when it would not.
-pub fn clamp_or_primary(x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
+pub fn clamp_or_primary(x: i32, y: i32, w: i32, h: i32, logical_h: f64) -> (i32, i32, i32, i32) {
     let area = (w as i64) * (h as i64);
     if area <= 0 {
         return (x, y, w, h);
@@ -226,7 +244,7 @@ pub fn clamp_or_primary(x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) 
         return (x, y, w, h);
     }
     match primary() {
-        Some(p) => target_position(&p, 0, 0),
+        Some(p) => target_position(&p, 0, 0, logical_h),
         None => (x, y, w, h),
     }
 }

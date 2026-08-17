@@ -66,9 +66,7 @@ pub fn save_report(app: &AppHandle) {
     match std::fs::write(&path, out) {
         Ok(_) => {
             message_box("FluxDock", &format!("Report written to\n{}", path.display()));
-            let _ = crate::providers::quiet_command("cmd")
-                .args(["/C", "start", "", &data_dir().to_string_lossy()])
-                .spawn();
+            crate::shell::open(&data_dir());
         }
         Err(e) => message_box("FluxDock", &format!("Report could not be written: {e}")),
     }
