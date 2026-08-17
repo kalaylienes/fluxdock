@@ -74,15 +74,20 @@ pub fn reposition(app: &AppHandle) {
                         .count();
                     let target = monitor::taskbar_position(&mon, &bar, s.widget.tray_gap, columns);
                     if target.is_none() {
+                        // A vertical strip cannot host the layout at all, so
+                        // this one is a real, lasting incompatibility.
                         tracing::warn!("vertical taskbar cannot host the widget, using floating placement");
                         state.settings.update(|s| s.widget.mode = "float".into());
                     }
                     target
                 }
                 None => {
-                    tracing::warn!("no taskbar found, using floating placement");
-                    state.settings.update(|s| s.widget.mode = "float".into());
-                    None
+                    // The strip is not always reachable, for instance while the
+                    // session is locked or Explorer is restarting. Rewriting the
+                    // preference here would quietly undo the user's choice, so
+                    // this pass is simply skipped.
+                    tracing::debug!("taskbar not reachable, leaving placement untouched");
+                    return;
                 }
             }
         } else {
