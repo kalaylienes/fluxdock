@@ -109,35 +109,74 @@ export default function App() {
 
   const pinned = appearance.placement === "taskbar";
 
+  const shellRef = React.useRef<HTMLDivElement | null>(null);
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
+
+  // The floating window is sized to what is actually on screen, so one provider
+  // does not sit in a window built for two. Taskbar placement is left alone:
+  // there the height belongs to the strip, not to the content.
+  React.useEffect(() => {
+    if (pinned) return;
+    const content = contentRef.current;
+    const shell = shellRef.current;
+    const bars = content?.parentElement;
+    if (!content || !shell || !bars) return;
+
+    let last = 0;
+    const report = () => {
+      const barsStyle = getComputedStyle(bars);
+      const shellStyle = getComputedStyle(shell);
+      // Read the frame from the stylesheet rather than repeating it here, so
+      // changing the padding in one place cannot leave the window wrong.
+      const frame =
+        parseFloat(barsStyle.paddingTop) +
+        parseFloat(barsStyle.paddingBottom) +
+        parseFloat(shellStyle.borderTopWidth) +
+        parseFloat(shellStyle.borderBottomWidth);
+      const needed = Math.ceil(content.getBoundingClientRect().height + frame);
+      if (needed > 0 && needed !== last) {
+        last = needed;
+        invoke("set_content_height", { height: needed }).catch(() => {});
+      }
+    };
+
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [pinned, providers, payload?.onboarding, appearance.compact_mode, appearance.show_model_weekly]);
+
   return (
-    <div className="fd-shell" data-placement={appearance.placement}>
+    <div className="fd-shell" data-placement={appearance.placement} ref={shellRef}>
       {!pinned && (
         <div className="fd-grip" onMouseDown={startDrag} title="Drag">
           <div className="fd-grip-dots" />
         </div>
       )}
       <div className="fd-bars">
-        {payload?.onboarding ? (
-          <Onboarding pinned={pinned} />
-        ) : pinned ? (
-          <div className="fd-columns">
-            {providers.map((p) => (
-              <ProviderColumn key={p.id} provider={p} now={now} motionOn={motionOn} />
-            ))}
-          </div>
-        ) : (
-          providers.map((p) => (
-            <ProviderGroup
-              key={p.id}
-              provider={p}
-              now={now}
-              motionOn={motionOn}
-              compact={appearance.compact_mode}
-              showModelWeekly={appearance.show_model_weekly}
-            />
-          ))
-        )}
-        {!payload && <div className="fd-status">Loading</div>}
+        <div className="fd-content" ref={contentRef}>
+          {payload?.onboarding ? (
+            <Onboarding pinned={pinned} />
+          ) : pinned ? (
+            <div className="fd-columns">
+              {providers.map((p) => (
+                <ProviderColumn key={p.id} provider={p} now={now} motionOn={motionOn} />
+              ))}
+            </div>
+          ) : (
+            providers.map((p) => (
+              <ProviderGroup
+                key={p.id}
+                provider={p}
+                now={now}
+                motionOn={motionOn}
+                compact={appearance.compact_mode}
+                showModelWeekly={appearance.show_model_weekly}
+              />
+            ))
+          )}
+          {!payload && <div className="fd-status">Loading</div>}
+        </div>
       </div>
     </div>
   );

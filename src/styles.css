@@ -96,6 +96,15 @@ body {
   justify-content: center;
 }
 
+/* The wrapper whose natural height the window is sized to. `.fd-bars` fills the
+   window, so it can never answer "how tall does this need to be". */
+.fd-content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
 .fd-grip {
   width: 6px;
   flex: 0 0 6px;
