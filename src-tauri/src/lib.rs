@@ -39,13 +39,58 @@ fn show_context_menu(app: AppHandle, window: tauri::WebviewWindow) {
     let menu = app.state::<tray::MenuHandle>().0.read().clone();
     if let Some(menu) = menu {
         window::foreground_for_menu(&window);
+        // Displaying the menu borrows it for the whole modal loop, and that
+        // loop keeps pumping queued work. Any rebuild that lands in the middle
+        // would take a second borrow of the same object and abort the process,
+        // so rebuilds are held back until the guard drops.
+        let guard = tray::PopupGuard::new();
         let _ = window.popup_menu(&menu);
+        drop(guard);
+        tray::flush_pending_rebuild(&app);
     }
+}
+
+/// Records where a panic happened before the process goes away.
+///
+/// The release profile aborts on panic and the app runs without a console, so
+/// without this a crash leaves nothing behind but a Windows fault code.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".into());
+
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no message".into());
+
+        tracing::error!("panic at {location}: {message}");
+
+        // Written separately because the tracing appender may not flush before
+        // the process aborts.
+        let path = settings::data_dir().join("last-crash.txt");
+        let _ = std::fs::create_dir_all(settings::data_dir());
+        let _ = std::fs::write(
+            path,
+            format!(
+                "{}\npanic at {location}\n{message}\n",
+                chrono::Utc::now().to_rfc3339()
+            ),
+        );
+
+        previous(info);
+    }));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_logging();
+    install_panic_hook();
 
     let mut builder = tauri::Builder::default();
 
@@ -72,6 +117,8 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+
+            settings::clear_stay_closed();
 
             let store = Arc::new(SettingsStore::load());
             let (state, rx) = AppState::new(store.clone());
@@ -135,7 +182,12 @@ pub fn run() {
         .expect("failed to start the application")
         .run(|_app, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+                // Hiding the last window must not end the process, but a
+                // deliberate quit has to get through. Preventing this
+                // unconditionally made the Exit menu item do nothing at all.
+                if !state::is_quitting() {
+                    api.prevent_exit();
+                }
             }
         });
 }

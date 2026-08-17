@@ -322,6 +322,93 @@ fn apply_fullscreen_hiding(app: &AppHandle, fullscreen: bool, stable_clear: bool
     }
 }
 
+/// Reclaims the top of the topmost band when the shell has covered the widget.
+///
+/// In taskbar placement both windows are topmost and the shell raises its own
+/// whenever the user touches the strip, the Start menu, or the notification
+/// area. Being topmost is not enough on its own; position within that band has
+/// to be taken back. The cheap check first means the window is only restacked
+/// when it is actually obscured, which avoids fighting other topmost windows.
+#[cfg(windows)]
+fn ensure_above_taskbar(app: &AppHandle) {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetWindowRect, SetWindowPos, WindowFromPoint, GA_ROOT, HWND_TOPMOST,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+
+    let Some(win) = widget(app) else { return };
+    if !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Some(hwnd) = crate::monitor::hwnd_of(&win) else {
+        return;
+    };
+
+    unsafe {
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            return;
+        }
+
+        let centre = POINT {
+            x: (rect.left + rect.right) / 2,
+            y: (rect.top + rect.bottom) / 2,
+        };
+        if GetAncestor(WindowFromPoint(centre), GA_ROOT) == hwnd {
+            return;
+        }
+
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn ensure_above_taskbar(_app: &AppHandle) {}
+
+/// Keeps taskbar placement visible when it should be.
+///
+/// `reposition` hides the widget while an auto hiding strip is away and relies
+/// on a later layout change to bring it back. If that change never arrives the
+/// widget stays hidden with nothing to recover it, so visibility is reconciled
+/// on every tick instead of only on transitions.
+#[cfg(windows)]
+fn reconcile_taskbar_visibility(app: &AppHandle) {
+    let state = app.state::<Arc<AppState>>();
+    let s = state.settings.get();
+
+    if !s.widget.taskbar_mode() || !s.widget.visible || AUTO_HIDDEN.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(win) = widget(app) else { return };
+    if win.is_visible().unwrap_or(true) {
+        return;
+    }
+
+    let Some((mon, _)) = crate::monitor::resolve(s.widget.monitor_stable_id.as_deref()) else {
+        return;
+    };
+    if crate::monitor::taskbar_for(&mon).map(|b| b.on_screen).unwrap_or(false) {
+        tracing::info!("taskbar strip is back, restoring the widget");
+        reposition(app);
+        let _ = win.show();
+    }
+}
+
+#[cfg(not(windows))]
+fn reconcile_taskbar_visibility(_app: &AppHandle) {}
+
 pub fn set_click_through(app: &AppHandle, enabled: bool) {
     if let Some(win) = widget(app) {
         let _ = win.set_ignore_cursor_events(enabled);
@@ -359,8 +446,16 @@ pub fn spawn_reconciler(app: AppHandle) {
                     if signature != last_signature {
                         last_signature = signature;
                         reposition(&app);
+                        // The menu only lists monitors, so it is left to decide
+                        // for itself whether anything it shows actually moved.
+                        // Taskbar geometry changes constantly and must not
+                        // drive menu swaps.
                         crate::tray::rebuild(&app);
                     }
+                }
+                if taskbar_mode {
+                    reconcile_taskbar_visibility(&app);
+                    ensure_above_taskbar(&app);
                 }
             }
 
@@ -472,14 +567,33 @@ fn foreground_covers_monitor() -> bool {
             return false;
         }
 
-        // Desktop and shell windows cover the display without being fullscreen.
-        let mut class = [0u16; 64];
+        // Plenty of system surfaces cover the whole display without being a
+        // fullscreen application: the lock screen, the task switcher, Task
+        // View, search, and the quick settings flyout among them. Treating any
+        // of those as a game hides the widget for as long as they are up, and
+        // the lock screen in particular means every unlock starts hidden.
+        let mut class = [0u16; 128];
         let len = GetClassNameW(hwnd, &mut class);
         if len > 0 {
-            let name = String::from_utf16_lossy(&class[..len as usize]);
+            let name = String::from_utf16_lossy(&class[..(len as usize).min(class.len())]);
             if matches!(
                 name.as_str(),
-                "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+                "Progman"
+                    | "WorkerW"
+                    | "Shell_TrayWnd"
+                    | "Shell_SecondaryTrayWnd"
+                    | "Shell_LightDismissOverlay"
+                    | "Windows.UI.Core.CoreWindow"
+                    | "ApplicationFrameWindow"
+                    | "XamlExplorerHostIslandWindow"
+                    | "MultitaskingViewFrame"
+                    | "TaskSwitcherWnd"
+                    | "TaskSwitcherOverlayWnd"
+                    | "ForegroundStaging"
+                    | "ControlCenterWindow"
+                    | "NativeHWNDHost"
+                    | "EdgeUiInputTopWndClass"
+                    | "LockScreenControllerProxyWindow"
             ) {
                 return false;
             }

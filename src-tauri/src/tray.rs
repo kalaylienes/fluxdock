@@ -1,5 +1,6 @@
 //! Tray icon, badge and context menu.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -14,8 +15,8 @@ use crate::{diagnostics, monitor, window};
 
 pub const TRAY_ID: &str = "main";
 
-/// Right clicking the widget opens the same menu, so it is kept here.
-pub struct MenuHandle(pub RwLock<Option<Menu<Wry>>>);
+/// The live menu, plus a signature of what it currently shows.
+pub struct MenuHandle(pub RwLock<Option<Menu<Wry>>>, pub RwLock<Option<String>>);
 
 const ICON_GREEN: &[u8] = include_bytes!("../icons/tray-green.png");
 const ICON_AMBER: &[u8] = include_bytes!("../icons/tray-amber.png");
@@ -23,9 +24,10 @@ const ICON_RED: &[u8] = include_bytes!("../icons/tray-red.png");
 const ICON_GRAY: &[u8] = include_bytes!("../icons/tray-gray.png");
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    app.manage(MenuHandle(RwLock::new(None)));
+    app.manage(MenuHandle(RwLock::new(None), RwLock::new(None)));
 
     let menu = build_menu(app)?;
+    let signature = menu_signature(app);
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(Image::from_bytes(ICON_GRAY)?)
         .tooltip("FluxDock")
@@ -44,18 +46,113 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    app.state::<MenuHandle>().0.write().replace(menu);
+    let state = app.state::<MenuHandle>();
+    state.0.write().replace(menu);
+    state.1.write().replace(signature);
     Ok(())
 }
 
-/// Rebuilt whenever settings or attached monitors change, because there is no
-/// reliable menu-about-to-open event on Windows tray menus.
-pub fn rebuild(app: &AppHandle) {
-    let Ok(menu) = build_menu(app) else { return };
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_menu(Some(menu.clone()));
+/// True while a context menu is on screen.
+///
+/// Showing a menu holds a mutable borrow of it for as long as it is displayed,
+/// and swapping the tray menu underneath takes a second borrow of the same
+/// object to detach the old one. That combination aborts the process, so
+/// rebuilds wait until the menu is dismissed.
+static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
+static REBUILD_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Description of everything the menu renders, so an unchanged menu is never
+/// rebuilt. Swapping it has a real cost and a real hazard; doing it only when
+/// the contents actually differ removes most of both.
+fn menu_signature(app: &AppHandle) -> String {
+    let s = app.state::<Arc<AppState>>().settings.get();
+    let mut sig = format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        s.widget.visible,
+        s.appearance.animations,
+        s.appearance.theme,
+        s.polling.http_interval_secs,
+        s.widget.mode,
+        s.widget.compact_mode,
+        s.widget.click_through,
+        s.widget.hide_on_fullscreen,
+        s.providers.claude.enabled,
+        s.providers.codex.enabled,
+        s.providers.claude.show_model_weekly,
+        s.autostart,
+    );
+    sig.push('|');
+    sig.push_str(s.widget.monitor_stable_id.as_deref().unwrap_or("-"));
+
+    // Only the identity of the attached monitors matters here. Their geometry
+    // changes constantly and must not drive menu rebuilds.
+    #[cfg(windows)]
+    for m in monitor::enumerate() {
+        sig.push('|');
+        sig.push_str(&m.stable_id);
+        sig.push_str(&m.friendly_name);
     }
-    app.state::<MenuHandle>().0.write().replace(menu);
+    sig
+}
+
+pub fn rebuild(app: &AppHandle) {
+    if POPUP_OPEN.load(Ordering::SeqCst) {
+        REBUILD_PENDING.store(true, Ordering::SeqCst);
+        return;
+    }
+
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if POPUP_OPEN.load(Ordering::SeqCst) {
+            REBUILD_PENDING.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        let signature = menu_signature(&handle);
+        {
+            let last = handle.state::<MenuHandle>();
+            if last.1.read().as_deref() == Some(signature.as_str()) {
+                return;
+            }
+        }
+
+        let Ok(menu) = build_menu(&handle) else { return };
+        if let Some(tray) = handle.tray_by_id(TRAY_ID) {
+            let _ = tray.set_menu(Some(menu.clone()));
+        }
+        let state = handle.state::<MenuHandle>();
+        state.0.write().replace(menu);
+        state.1.write().replace(signature);
+    });
+}
+
+/// Marks a context menu as displayed for as long as the guard lives.
+pub struct PopupGuard;
+
+impl Default for PopupGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PopupGuard {
+    pub fn new() -> Self {
+        POPUP_OPEN.store(true, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for PopupGuard {
+    fn drop(&mut self) {
+        POPUP_OPEN.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Applies a rebuild that was deferred while a menu was open.
+pub fn flush_pending_rebuild(app: &AppHandle) {
+    if REBUILD_PENDING.swap(false, Ordering::SeqCst) {
+        rebuild(app);
+    }
 }
 
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -260,7 +357,15 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             needs_rebuild = false;
         }
         "restart" => {
-            app.restart();
+            // app.restart() hands off to a child that immediately finds this
+            // still-running instance through the single instance lock, defers
+            // to it, and exits, leaving nothing behind once the parent goes.
+            // A detached launcher that waits for this process to disappear is
+            // the reliable version.
+            relaunch_after_exit();
+            crate::state::begin_quit();
+            app.exit(0);
+            return;
         }
         "show_widget" => window::toggle_visibility(app),
         "animations" => {
@@ -315,6 +420,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             let _ = open_path(&crate::settings::data_dir().join("logs"));
         }
         "exit" => {
+            // Quitting here is deliberate, so the watchdog leaves it alone.
+            crate::settings::mark_stay_closed();
+            crate::state::begin_quit();
             app.exit(0);
             return;
         }
@@ -436,6 +544,27 @@ pub fn update_badge(app: &AppHandle, payload: &UsagePayload) {
         parts.join("  |  ")
     };
     let _ = tray.set_tooltip(Some(tooltip));
+}
+
+/// Starts a detached helper that waits for this process to exit and then
+/// launches the executable again. Waiting matters: the single instance lock is
+/// only released once this process is gone.
+fn relaunch_after_exit() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let pid = std::process::id();
+    let script = format!(
+        "$ErrorActionPreference='SilentlyContinue'; \
+         Wait-Process -Id {pid} -Timeout 20; \
+         Start-Sleep -Milliseconds 500; \
+         Start-Process -FilePath '{}'",
+        exe.display()
+    );
+
+    let _ = crate::providers::quiet_command("powershell")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .spawn();
 }
 
 fn open_path(path: &std::path::Path) -> std::io::Result<()> {

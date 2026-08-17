@@ -8,11 +8,13 @@ next to the clock.
 
 ![FluxDock floating above the taskbar](docs/media/floating-dark.png)
 
-```
-Placement: floating          Placement: pinned to taskbar
-```
+<sub>Floating placement. Each tool gets its five hour and weekly window, with the
+percentage and the time left before it resets.</sub>
 
 ![FluxDock pinned into the taskbar](docs/media/taskbar.png)
+
+<sub>Pinned placement. The same four numbers, laid out as one column per tool so
+the whole thing fits inside the taskbar strip.</sub>
 
 ## Why
 
@@ -46,6 +48,12 @@ question is answered before you ask it.
   and scripts.
 
 ![Warning and stale states](docs/media/states.png)
+
+<sub>Above: the first window is past 90% and turns red, the second is in the
+warning band. The grey row is a stale snapshot. Codex only updates its counters
+while it is running, so once a snapshot is older than the window it describes the
+bar greys out and the countdown clears rather than showing a number that has
+quietly stopped being true.</sub>
 
 ## Install
 
@@ -137,6 +145,31 @@ locations work without configuration.
 
 Run with `--demo` to see the interface driven by synthetic values, which is
 useful for reviewing the layout before your own usage builds up.
+
+## Keeping it running
+
+FluxDock is meant to be something you stop thinking about, so there is an
+optional watchdog:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-watchdog.ps1
+```
+
+It registers a scheduled task that starts FluxDock at sign in and checks once a
+minute afterwards. If the process is gone for any reason it comes back within
+the minute, without asking.
+
+Quitting from the tray menu is treated as deliberate and the watchdog leaves it
+alone. Ending the process from Task Manager is not, so it restarts. To take the
+watchdog off again:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-watchdog.ps1 -Remove
+```
+
+If a crash ever does happen, the panic location is written to
+`%APPDATA%\FluxDock\last-crash.txt` along with the rolling logs next to it.
+That file is the useful thing to attach to an issue.
 
 ## Privacy
 

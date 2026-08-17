@@ -13,6 +13,17 @@ use crate::providers::codex::CodexProvider;
 use crate::settings::SettingsStore;
 use crate::theme;
 
+/// Set just before a deliberate quit so the exit guard lets it through.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+pub fn begin_quit() {
+    QUITTING.store(true, Ordering::SeqCst);
+}
+
+pub fn is_quitting() -> bool {
+    QUITTING.load(Ordering::SeqCst)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refresh {
     /// A watched file changed. Local layers refresh, the network is left alone.

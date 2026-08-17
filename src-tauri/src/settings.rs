@@ -223,6 +223,23 @@ pub fn settings_path() -> PathBuf {
     data_dir().join("settings.json")
 }
 
+/// Presence of this file tells the watchdog task that the app was closed on
+/// purpose and should stay closed.
+pub fn stay_closed_marker() -> PathBuf {
+    data_dir().join("stay-closed")
+}
+
+/// Called when the user quits from the tray menu.
+pub fn mark_stay_closed() {
+    let _ = std::fs::create_dir_all(data_dir());
+    let _ = std::fs::write(stay_closed_marker(), "quit from the tray menu\n");
+}
+
+/// Called on every start, so a watchdog restart or a manual launch clears it.
+pub fn clear_stay_closed() {
+    let _ = std::fs::remove_file(stay_closed_marker());
+}
+
 /// Single instance for the lifetime of the process. Every mutation is written
 /// through immediately.
 pub struct SettingsStore {
