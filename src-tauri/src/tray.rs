@@ -412,13 +412,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             let enabled = state.settings.update(|s| s.autostart = !s.autostart).autostart;
             crate::autostart::apply(app, enabled);
         }
-        "open_settings" => {
-            let _ = open_path(&crate::settings::settings_path());
-        }
+        "open_settings" => open_path(&crate::settings::settings_path()),
         "diag:report" => diagnostics::save_report(app),
-        "diag:logs" => {
-            let _ = open_path(&crate::settings::data_dir().join("logs"));
-        }
+        "diag:logs" => open_path(&crate::settings::data_dir().join("logs")),
         "exit" => {
             // Quitting here is deliberate, so the watchdog leaves it alone.
             crate::settings::mark_stay_closed();
@@ -546,31 +542,23 @@ pub fn update_badge(app: &AppHandle, payload: &UsagePayload) {
     let _ = tray.set_tooltip(Some(tooltip));
 }
 
-/// Starts a detached helper that waits for this process to exit and then
-/// launches the executable again. Waiting matters: the single instance lock is
+/// Starts a detached copy of this executable that waits for this process to exit
+/// and then launches a fresh one. Waiting matters: the single instance lock is
 /// only released once this process is gone.
+///
+/// A PowerShell one liner used to do the waiting. The binary does it itself now,
+/// because a console program started in the background can put a window on the
+/// user's screen and this app has no business doing that.
 fn relaunch_after_exit() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let pid = std::process::id();
-    let script = format!(
-        "$ErrorActionPreference='SilentlyContinue'; \
-         Wait-Process -Id {pid} -Timeout 20; \
-         Start-Sleep -Milliseconds 500; \
-         Start-Process -FilePath '{}'",
-        exe.display()
-    );
-
-    let _ = crate::providers::quiet_command("powershell")
-        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+    let _ = crate::providers::quiet_command(&exe.to_string_lossy())
+        .args(["--relaunch-after", &std::process::id().to_string()])
         .spawn();
 }
 
-fn open_path(path: &std::path::Path) -> std::io::Result<()> {
+fn open_path(path: &std::path::Path) {
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(path));
-    crate::providers::quiet_command("cmd")
-        .args(["/C", "start", "", &path.to_string_lossy()])
-        .spawn()
-        .map(|_| ())
+    crate::shell::open(path);
 }

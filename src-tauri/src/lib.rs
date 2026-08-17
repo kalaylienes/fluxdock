@@ -10,6 +10,7 @@ pub mod monitor;
 pub mod net;
 pub mod providers;
 pub mod settings;
+pub mod shell;
 pub mod state;
 pub mod theme;
 pub mod tray;
@@ -32,6 +33,14 @@ fn get_usage(state: tauri::State<'_, Arc<AppState>>) -> Option<UsagePayload> {
 #[tauri::command]
 fn get_appearance(state: tauri::State<'_, Arc<AppState>>) -> AppearanceConfig {
     state.appearance()
+}
+
+/// The interface reports how tall its content actually is, and the floating
+/// window is sized to that. One provider needs half the height of two, and a
+/// fixed size left the smaller case padded with dead space at both ends.
+#[tauri::command]
+fn set_content_height(app: AppHandle, height: f64) {
+    window::set_content_height(&app, height);
 }
 
 #[tauri::command]
@@ -69,6 +78,16 @@ fn install_panic_hook() {
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "no message".into());
 
+        // A panic while the session is being torn down is not a fault worth a
+        // crash report: the shell has already destroyed the window and the
+        // process was going away regardless. Filing it would bury the reports
+        // that do mean something.
+        if session_ending() {
+            tracing::warn!("panic while the session was closing, at {location}: {message}");
+            previous(info);
+            return;
+        }
+
         tracing::error!("panic at {location}: {message}");
 
         // Written separately because the tracing appender may not flush before
@@ -87,8 +106,45 @@ fn install_panic_hook() {
     }));
 }
 
+/// Marks a launch by the watchdog task rather than by a person.
+const WATCHDOG_FLAG: &str = "--watchdog";
+
+/// Followed by the process id to wait for. Used by the restart menu item.
+const RELAUNCH_FLAG: &str = "--relaunch-after";
+
+fn launched_by_watchdog() -> bool {
+    std::env::args().any(|a| a == WATCHDOG_FLAG)
+}
+
+/// The process this launch is supposed to outlive, if it is a restart helper.
+fn relaunch_target() -> Option<u32> {
+    let mut args = std::env::args();
+    while let Some(arg) = args.next() {
+        if arg == RELAUNCH_FLAG {
+            return args.next().and_then(|v| v.parse().ok());
+        }
+    }
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The watchdog runs this executable itself rather than going through a shell,
+    // because a scheduled task that starts a console program flashes a window
+    // over whatever is in front, once a minute, forever. That means the "stay
+    // closed" marker has to be honoured here: reaching this point at all means
+    // no instance was running, so this launch would undo a deliberate quit.
+    if launched_by_watchdog() && settings::stay_closed_marker().exists() {
+        return;
+    }
+
+    // Restart helper. Nothing of the app is built in this mode: it waits for the
+    // process that asked for the restart, starts a fresh one and returns.
+    if let Some(pid) = relaunch_target() {
+        shell::relaunch_after(pid, std::time::Duration::from_secs(20));
+        return;
+    }
+
     init_logging();
     install_panic_hook();
 
@@ -98,8 +154,14 @@ pub fn run() {
     // running process and brings the widget back.
     #[cfg(windows)]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            window::show(app);
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // A watchdog check is not a request to see the widget. Unhiding it
+            // every minute would override the user, and showing anything over a
+            // fullscreen game costs the game its mode.
+            if argv.iter().any(|a| a == WATCHDOG_FLAG) {
+                return;
+            }
+            window::show_by_request(app);
         }));
         builder = builder.plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -113,6 +175,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_usage,
             get_appearance,
+            set_content_height,
             show_context_menu
         ])
         .setup(|app| {
@@ -180,16 +243,36 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to start the application")
-        .run(|_app, event| {
+        .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 // Hiding the last window must not end the process, but a
                 // deliberate quit has to get through. Preventing this
                 // unconditionally made the Exit menu item do nothing at all.
-                if !state::is_quitting() {
+                //
+                // Windows signing the user out has to get through as well. The
+                // shell destroys the window first and the event loop cannot be
+                // driven past that point: keeping it alive aborts inside the
+                // toolkit with "cannot move state from Destroyed", which lands
+                // in the crash report as if something had gone wrong during an
+                // otherwise orderly shutdown.
+                let torn_down = session_ending() || window::widget(app).is_none();
+                if !state::is_quitting() && !torn_down {
                     api.prevent_exit();
                 }
             }
         });
+}
+
+/// Has the shell started tearing the session down?
+#[cfg(windows)]
+fn session_ending() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+    unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+}
+
+#[cfg(not(windows))]
+fn session_ending() -> bool {
+    false
 }
 
 /// Collected from the providers themselves so a new source does not need a

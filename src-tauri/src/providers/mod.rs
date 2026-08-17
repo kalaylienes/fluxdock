@@ -77,12 +77,47 @@ pub fn cli_command(path: &str) -> std::process::Command {
     }
 }
 
+/// How long a lookup result is trusted. A CLI does not move around often, and a
+/// missing one especially does not appear on its own.
+#[cfg(windows)]
+const PATH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// A lookup result and when it was taken. `None` is a remembered miss.
+#[cfg(windows)]
+type PathLookup = (Option<String>, std::time::Instant);
+
+/// Remembered lookups, misses included. `where` is itself a process, so calling
+/// it on every poll spawns one for a CLI that is not installed at all.
+#[cfg(windows)]
+static PATH_CACHE: parking_lot::Mutex<Option<std::collections::HashMap<String, PathLookup>>> =
+    parking_lot::Mutex::new(None);
+
 /// Picks an entry point Windows can actually launch.
 ///
 /// `where` lists the extensionless shell script first, which fails with
 /// "not a valid Win32 application", so executable extensions win.
 #[cfg(windows)]
 pub fn resolve_on_path(name: &str) -> Option<String> {
+    {
+        let mut guard = PATH_CACHE.lock();
+        let cache = guard.get_or_insert_with(std::collections::HashMap::new);
+        if let Some((hit, at)) = cache.get(name) {
+            if at.elapsed() < PATH_CACHE_TTL {
+                return hit.clone();
+            }
+        }
+    }
+
+    let found = lookup_on_path(name);
+    PATH_CACHE
+        .lock()
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(name.to_string(), (found.clone(), std::time::Instant::now()));
+    found
+}
+
+#[cfg(windows)]
+fn lookup_on_path(name: &str) -> Option<String> {
     let out = quiet_command("where").arg(name).output().ok()?;
     if !out.status.success() {
         return None;
