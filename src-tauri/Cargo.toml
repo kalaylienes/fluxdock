@@ -1,6 +1,6 @@
 [package]
 name = "fluxdock"
-version = "1.0.2"
+version = "1.0.3"
 description = "Windows widget for Claude Code and Codex CLI usage windows"
 authors = ["FluxDock contributors"]
 license = "GPL-3.0-or-later"

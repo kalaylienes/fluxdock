@@ -1,7 +1,7 @@
 {
   "name": "fluxdock",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Windows widget that shows Claude Code and Codex CLI usage for every limit window your account has, either floating above the taskbar or pinned into it.",
   "license": "GPL-3.0-or-later",
   "author": "kalaylienes",
