@@ -83,6 +83,13 @@ fn menu_signature(app: &AppHandle) -> String {
     );
     sig.push('|');
     sig.push_str(s.widget.monitor_stable_id.as_deref().unwrap_or("-"));
+    sig.push('|');
+    sig.push_str(crate::update::available().as_deref().unwrap_or("-"));
+    sig.push_str(if crate::update::installing() {
+        "busy"
+    } else {
+        ""
+    });
 
     // Only the identity of the attached monitors matters here. Their geometry
     // changes constantly and must not drive menu rebuilds.
@@ -163,6 +170,21 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         MenuItemBuilder::with_id("header", format!("FluxDock v{}", env!("CARGO_PKG_VERSION")))
             .enabled(false)
             .build(app)?;
+
+    // A waiting update goes above everything else. Anywhere further down and it
+    // is a line in a long menu nobody reads.
+    let update_ready = match (crate::update::available(), crate::update::installing()) {
+        (_, true) => Some(
+            MenuItemBuilder::with_id("update:install", "Updating, please wait")
+                .enabled(false)
+                .build(app)?,
+        ),
+        (Some(v), false) => Some(
+            MenuItemBuilder::with_id("update:install", format!("Update to {v} and restart"))
+                .build(app)?,
+        ),
+        (None, false) => None,
+    };
 
     let refresh = MenuItemBuilder::with_id("refresh", "Refresh now").build(app)?;
     let restart = MenuItemBuilder::with_id("restart", "Force restart").build(app)?;
@@ -318,10 +340,20 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let diag = SubmenuBuilder::new(app, "Diagnostics")
         .item(&MenuItemBuilder::with_id("diag:report", "Save diagnostic report").build(app)?)
         .item(&MenuItemBuilder::with_id("diag:logs", "Open log folder").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("update:check", "Check for updates").build(app)?)
+        .item(
+            &CheckMenuItemBuilder::with_id("update:auto", "Check automatically")
+                .checked(s.updates.check)
+                .build(app)?,
+        )
         .build()?;
 
-    MenuBuilder::new(app)
-        .item(&header)
+    let mut builder = MenuBuilder::new(app).item(&header);
+    if let Some(item) = &update_ready {
+        builder = builder.separator().item(item);
+    }
+    builder
         .separator()
         .item(&refresh)
         .item(&restart)
@@ -355,6 +387,35 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "refresh" => {
             state.request(Refresh::Manual);
             needs_rebuild = false;
+        }
+        "update:install" => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move { crate::update::install(&handle).await });
+            needs_rebuild = false;
+        }
+        "update:check" => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                // A check the user asked for gets an answer either way. The
+                // background one stays silent, but silence in response to a
+                // click reads as a broken button.
+                let found = crate::update::check(&handle).await;
+                if found.is_none() {
+                    crate::diagnostics::message_box(
+                        "FluxDock",
+                        &format!(
+                            "FluxDock {} is the newest version.",
+                            env!("CARGO_PKG_VERSION")
+                        ),
+                    );
+                }
+            });
+            needs_rebuild = false;
+        }
+        "update:auto" => {
+            state
+                .settings
+                .update(|s| s.updates.check = !s.updates.check);
         }
         "restart" => {
             // app.restart() hands off to a child that immediately finds this

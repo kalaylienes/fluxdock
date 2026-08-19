@@ -89,6 +89,24 @@ The binary is not code signed yet, so Windows SmartScreen will warn on first
 run. Choose **More info**, then **Run anyway**, or build it yourself from
 source below and judge the code directly.
 
+### Updates
+
+FluxDock asks GitHub once every six hours whether a newer release exists. When
+there is one, a line appears at the top of the tray menu and stays there until
+you click it. Nothing downloads or installs on its own.
+
+Clicking it fetches the installer and checks it against a public key compiled
+into the copy you are already running, so a release that was not signed with the
+matching private key is refused rather than run. The app then closes for a few
+seconds while the installer replaces it, and comes back on the new version.
+
+**Diagnostics → Check for updates** asks straight away and tells you either way.
+**Check automatically** in the same submenu turns the six hourly question off; it
+is the `updates.check` field in `settings.json` if you would rather edit it there.
+
+Versions before 1.0.3 have no update check at all, so a copy older than that has
+to be replaced by hand once.
+
 ## Using it
 
 The tray icon is the control surface.

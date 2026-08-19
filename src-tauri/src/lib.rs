@@ -14,6 +14,7 @@ pub mod shell;
 pub mod state;
 pub mod theme;
 pub mod tray;
+pub mod update;
 pub mod window;
 
 use std::sync::Arc;
@@ -172,6 +173,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_usage,
             get_appearance,
@@ -189,6 +191,7 @@ pub fn run() {
 
             tray::setup(&handle)?;
             autostart::sync(&handle, store.get().autostart);
+            update::watch(&handle);
 
             window::apply_ex_styles(&handle);
             window::reposition(&handle);

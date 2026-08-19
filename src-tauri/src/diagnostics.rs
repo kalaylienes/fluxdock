@@ -80,7 +80,7 @@ pub fn save_report(app: &AppHandle) {
 }
 
 #[cfg(windows)]
-fn message_box(title: &str, text: &str) {
+pub fn message_box(title: &str, text: &str) {
     use windows::core::HSTRING;
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
     unsafe {
@@ -94,6 +94,6 @@ fn message_box(title: &str, text: &str) {
 }
 
 #[cfg(not(windows))]
-fn message_box(_title: &str, text: &str) {
+pub fn message_box(_title: &str, text: &str) {
     tracing::info!("{text}");
 }

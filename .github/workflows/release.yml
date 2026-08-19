@@ -30,7 +30,12 @@ jobs:
 
       - run: npm ci
 
+      # Signing is what lets an installed copy trust the installer it downloads,
+      # so a build without the key would produce a release nobody can update to.
       - name: Build the bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
       - name: Check the tag against the manifest
@@ -55,10 +60,38 @@ jobs:
           # The Scoop manifest carries this hash, so it has to be easy to find.
           "Portable zip SHA256: ``$hash``" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
+      - name: Write the updater manifest
+        shell: pwsh
+        run: |
+          # Tauri 2 signs the installer itself and drops a .sig beside it. There
+          # is no zip wrapper; the updater downloads the setup executable.
+          $nsis = "src-tauri/target/release/bundle/nsis"
+          $installer = "$nsis/FluxDock_${env:VERSION}_x64-setup.exe"
+          $sigFile = "$installer.sig"
+          if (-not (Test-Path $sigFile)) {
+            throw "no signature at $sigFile, so the build was not signed and no installed copy could accept it"
+          }
+          $manifest = [ordered]@{
+            version   = $env:VERSION
+            pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            notes     = "See the release notes at https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = (Get-Content $sigFile -Raw).Trim()
+                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/FluxDock_${env:VERSION}_x64-setup.exe"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Out-File latest.json -Encoding utf8
+          "SIGFILE=$sigFile" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Draft the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $setup = "src-tauri/target/release/bundle/nsis/FluxDock_${env:VERSION}_x64-setup.exe"
-          gh release create "${{ github.ref_name }}" --draft --title "FluxDock $env:VERSION" --notes "Draft. Write the notes, check the Scoop hash in the run summary, then publish." $setup $env:ZIP
+          # latest.json and the signed archive have to travel with the release:
+          # installed copies read them from the newest published tag, so a draft
+          # that is missing them silently strands everyone on their old version.
+          gh release create "${{ github.ref_name }}" --draft --title "FluxDock $env:VERSION" --notes "Draft. Write the notes, check the Scoop hash in the run summary, then publish." $setup $env:ZIP $env:SIGFILE latest.json
