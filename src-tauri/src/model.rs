@@ -49,10 +49,14 @@ impl WindowKind {
     }
 
     /// A snapshot older than the window it describes cannot be trusted.
+    /// Written out in full on purpose: a catch-all would hand a seven day
+    /// threshold to any short window added later without a word about it.
     pub fn duration(self) -> chrono::Duration {
         match self {
             WindowKind::FiveHour => chrono::Duration::hours(5),
-            _ => chrono::Duration::days(7),
+            WindowKind::Weekly | WindowKind::WeeklyOpus | WindowKind::WeeklySonnet => {
+                chrono::Duration::days(7)
+            }
         }
     }
 }
@@ -61,6 +65,10 @@ impl WindowKind {
 pub struct WindowSnapshot {
     /// Percentage of the window consumed, 0 to 100.
     pub utilization: f32,
+    /// Short row label when the provider states the window length itself.
+    /// Codex does, and its `primary` slot is not always the five hour one, so
+    /// the label rather than the field name is what the row actually means.
+    pub label: Option<String>,
     pub resets_at: Option<DateTime<Utc>>,
     pub source: Source,
     /// When this value was measured, not when it was rendered.
@@ -75,6 +83,7 @@ impl WindowSnapshot {
     pub fn official(utilization: f32, resets_at: Option<DateTime<Utc>>) -> Self {
         Self {
             utilization,
+            label: None,
             resets_at,
             source: Source::Official,
             as_of: Utc::now(),

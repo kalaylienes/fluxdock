@@ -520,18 +520,24 @@ pub fn update_badge(app: &AppHandle, payload: &UsagePayload) {
 
     let mut parts: Vec<String> = Vec::new();
     for p in &payload.providers {
-        match (p.five_hour.as_ref(), p.weekly.as_ref()) {
-            (Some(a), Some(b)) => parts.push(format!(
-                "{} 5h {:.0}% / 7d {:.0}%",
-                p.label, a.utilization, b.utilization
-            )),
-            (Some(a), None) => parts.push(format!("{} 5h {:.0}%", p.label, a.utilization)),
-            (None, Some(b)) => parts.push(format!("{} 7d {:.0}%", p.label, b.utilization)),
-            (None, None) => {
-                if let Some(d) = &p.detail {
-                    parts.push(format!("{}: {}", p.label, d));
-                }
+        // Whatever windows this provider actually has, named as it named them.
+        let windows: Vec<String> = [("5h", p.five_hour.as_ref()), ("7d", p.weekly.as_ref())]
+            .into_iter()
+            .filter_map(|(fallback, w)| {
+                let w = w?;
+                Some(format!(
+                    "{} {:.0}%",
+                    w.label.as_deref().unwrap_or(fallback),
+                    w.utilization
+                ))
+            })
+            .collect();
+        if windows.is_empty() {
+            if let Some(d) = &p.detail {
+                parts.push(format!("{}: {}", p.label, d));
             }
+        } else {
+            parts.push(format!("{} {}", p.label, windows.join(" / ")));
         }
     }
     let tooltip = if parts.is_empty() {

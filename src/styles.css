@@ -172,8 +172,10 @@ body {
 }
 
 .fd-column .fd-label {
-  flex: 0 0 16px;
-  width: 16px;
+  /* Wide enough for a three character window name such as 12h or 30m, which
+     is what an account with an unusual limit length gets called. */
+  flex: 0 0 20px;
+  width: 20px;
 }
 
 .fd-column .fd-pct {
@@ -224,8 +226,8 @@ body {
 }
 
 .fd-label {
-  flex: 0 0 22px;
-  width: 22px;
+  flex: 0 0 25px;
+  width: 25px;
   font-weight: 600;
   letter-spacing: 0.02em;
 }

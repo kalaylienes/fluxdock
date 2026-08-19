@@ -438,6 +438,7 @@ impl ClaudeProvider {
                 };
                 snap.five_hour = Some(WindowSnapshot {
                     utilization: value,
+                    label: None,
                     resets_at: if expired { None } else { resets },
                     source: label_source(source, util, value, expired),
                     as_of: last.at,
@@ -455,6 +456,7 @@ impl ClaudeProvider {
                 };
                 snap.weekly = Some(WindowSnapshot {
                     utilization: value,
+                    label: None,
                     // A weekly reset cannot be derived locally, so the last known
                     // one is projected forward until the next successful poll.
                     resets_at: if expired {

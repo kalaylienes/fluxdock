@@ -123,6 +123,20 @@ pub async fn cycle(app: &AppHandle, state: &Arc<AppState>, force: bool) {
     tray::update_badge(app, &payload);
 }
 
+/// Turns a row label back into something a notification can read out loud.
+/// Anything unfamiliar is quoted as it came, which is better than inventing a
+/// name for a window whose length nobody here recognised.
+fn window_name(label: &str) -> String {
+    match label {
+        "5h" => "five hour".into(),
+        "1d" => "daily".into(),
+        "7d" => "weekly".into(),
+        "1M" => "monthly".into(),
+        "1y" => "annual".into(),
+        other => format!("{other} usage"),
+    }
+}
+
 fn check_thresholds(app: &AppHandle, state: &Arc<AppState>, payload: &UsagePayload) {
     use tauri_plugin_notification::NotificationExt;
 
@@ -130,11 +144,18 @@ fn check_thresholds(app: &AppHandle, state: &Arc<AppState>, payload: &UsagePaylo
     let mut newly_fired: Vec<String> = Vec::new();
 
     for provider in &payload.providers {
-        for (label, name, window) in [
-            ("5h", "five hour", provider.five_hour.as_ref()),
-            ("7d", "weekly", provider.weekly.as_ref()),
+        for (slot, window) in [
+            ("5h", provider.five_hour.as_ref()),
+            ("7d", provider.weekly.as_ref()),
         ] {
             let Some(w) = window else { continue };
+            // Codex states how long its windows are and they are not always the
+            // pair this loop is named after, so the toast quotes what the
+            // provider called the window rather than which field it arrived in.
+            // The dedupe key stays on the slot: a label that came and went with
+            // a field in the payload would look like a new window and fire the
+            // same warning twice.
+            let name = window_name(w.label.as_deref().unwrap_or(slot));
             if w.stale {
                 continue;
             }
@@ -147,7 +168,7 @@ fn check_thresholds(app: &AppHandle, state: &Arc<AppState>, payload: &UsagePaylo
                 if !enabled || w.utilization < level as f32 {
                     continue;
                 }
-                let key = fired_key(provider.id, label, w.resets_at, level);
+                let key = fired_key(provider.id, slot, w.resets_at, level);
                 if settings.notifications.fired.contains_key(&key) {
                     break;
                 }
@@ -266,6 +287,7 @@ pub async fn run_demo(app: AppHandle, state: Arc<AppState>) {
 
         let window = |util: f32, minutes: i64| WindowSnapshot {
             utilization: util,
+            label: None,
             resets_at: Some(Utc::now() + ChronoDuration::minutes(minutes)),
             source: crate::model::Source::Official,
             as_of: Utc::now(),

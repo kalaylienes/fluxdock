@@ -16,6 +16,11 @@ export type ProviderStatus =
 export interface WindowSnapshot {
   /** Percentage of the window consumed, 0 to 100. */
   utilization: number;
+  /**
+   * Short row label when the provider states how long the window is. Codex
+   * does, and its first window is not always the five hour one.
+   */
+  label: string | null;
   resets_at: string | null;
   source: Source;
   /** When the value was measured, not when it was rendered. */

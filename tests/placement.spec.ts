@@ -17,6 +17,8 @@ test("taskbar placement lays providers out side by side", async ({ page }) => {
   await expect(page.locator(".fd-column")).toHaveCount(2);
   // Both windows stay visible, two rows per provider.
   await expect(page.locator(".fd-row")).toHaveCount(4);
+  // These fixtures state no window length, so this is the fallback naming, not
+  // evidence that the labels are still fixed. Codex supplies its own.
   expect(await page.locator(".fd-label").allInnerTexts()).toEqual(["5h", "7d", "5h", "7d"]);
   // Position is derived from the strip, so there is nothing to drag.
   await expect(page.locator(".fd-grip")).toHaveCount(0);

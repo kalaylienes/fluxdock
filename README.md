@@ -1,14 +1,14 @@
 # FluxDock
 
 A small Windows widget that shows how much of your Claude Code and Codex CLI
-limits you have left, for both the rolling five hour window and the weekly one.
+limits you have left, one bar per limit window your account actually has.
 
 It runs as a floating widget above the taskbar, or pinned into the taskbar strip
 next to the clock.
 
 ![FluxDock floating above the taskbar](docs/media/floating-dark.png)
 
-<sub>Floating placement. Each tool gets its five hour and weekly window, with the
+<sub>Floating placement. Each tool gets a row per limit window, with the
 percentage and the time left before it resets.</sub>
 
 ![FluxDock pinned into the taskbar](docs/media/taskbar.png)
@@ -27,8 +27,11 @@ question is answered before you ask it.
 
 ## Features
 
-- **Both limit windows per tool.** Five hour and weekly, each with its own bar
-  and countdown to the reset.
+- **Every limit window your account has.** Each gets its own bar and countdown
+  to the reset, named by how long the window runs. Claude Code reports a five
+  hour and a weekly window. Codex reports whichever windows the plan is given,
+  and OpenAI has changed that set before, so the row is labelled from the
+  length the server states rather than from a fixed assumption.
 - **Server numbers first.** Claude Code figures come from the official usage
   endpoint. Anything derived locally is marked `est.` so the two are never
   confused.
@@ -263,8 +266,8 @@ FluxDock is a read only status widget for tools that enforce a real quota. It is
 not a cost dashboard, not a proxy between your CLI and the API, and not
 cross platform: the placement logic is written against the Windows shell.
 
-Support is limited to Claude Code and Codex CLI because both expose rolling five
-hour and weekly windows with a first party readable source. Other tools were
+Support is limited to Claude Code and Codex CLI because both expose their limit
+windows through a first party readable source. Other tools were
 evaluated against that bar; see [docs/providers.md](docs/providers.md) for what
 was checked and why each one was or was not a fit.
 

@@ -312,3 +312,84 @@ test("reference screenshots", async ({ page }, testInfo) => {
   await page.waitForTimeout(1200);
   await page.screenshot({ path: "tests/screenshots/widget-warning.png" });
 });
+
+/**
+ * OpenAI took the five hour window away from Plus, Pro and Business in July
+ * 2026. What arrives now is a single weekly window, and it arrives in the slot
+ * the widget used to call "5h". A row is only drawn for a window the account
+ * actually has, and it is named by the length the provider stated.
+ */
+test("a lone weekly window is one row named 7d, not a 5h row at zero", async ({ page }) => {
+  await boot(
+    page,
+    payload([
+      provider("codex", {
+        five_hour: win(37, 4 * 24 * 60, { label: "7d" }),
+        plan_type: "plus",
+      }),
+    ]),
+  );
+
+  await expect(page.locator(".fd-row")).toHaveCount(1);
+  await expect(page.locator(".fd-label")).toHaveText("7d");
+  await expect(page.locator(".fd-pct")).toContainText("37%");
+  await expect(page.locator(".fd-pct .fd-est")).toHaveCount(0);
+});
+
+test("an unfamiliar window length is shown as the provider described it", async ({ page }) => {
+  await boot(
+    page,
+    payload([
+      provider("codex", {
+        five_hour: win(20, 700, { label: "12h" }),
+        weekly: win(60, 43_000, { label: "1M" }),
+      }),
+    ]),
+  );
+
+  expect(await page.locator(".fd-label").allInnerTexts()).toEqual(["12h", "1M"]);
+
+  // The widest of these labels still has to fit its column, in both layouts.
+  // The taskbar strip gives it less room than the floating window does.
+  for (const placement of ["float", "taskbar"] as const) {
+    await setAppearance(page, { placement });
+    await expect(page.locator(".fd-column")).toHaveCount(placement === "taskbar" ? 1 : 0);
+    for (const label of await page.locator(".fd-label").all()) {
+      // The column does not clip, so scrollWidth would report a fit either
+      // way. Measuring the text itself is the only thing that catches a label
+      // spilling into the bar next to it.
+      const room = await label.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return el.getBoundingClientRect().width - range.getBoundingClientRect().width;
+      });
+      expect(room).toBeGreaterThan(1);
+    }
+  }
+});
+
+test("a provider that states no window length keeps the standing labels", async ({ page }) => {
+  await boot(
+    page,
+    payload([provider("claude", { five_hour: win(34, 134), weekly: win(12, 4000) })]),
+  );
+  expect(await page.locator(".fd-label").allInnerTexts()).toEqual(["5h", "7d"]);
+});
+
+/**
+ * The mixed case, which is what a machine in this state actually renders:
+ * Claude names its windows in the response so it keeps the standing labels,
+ * while Codex is down to one window and says how long it is.
+ */
+test("a derived label and the standing ones sit side by side", async ({ page }) => {
+  await boot(
+    page,
+    payload([
+      provider("claude", { five_hour: win(34, 134), weekly: win(12, 4000) }),
+      provider("codex", { five_hour: win(37, 4 * 24 * 60, { label: "7d" }), plan_type: "plus" }),
+    ]),
+  );
+
+  await expect(page.locator(".fd-row")).toHaveCount(3);
+  expect(await page.locator(".fd-label").allInnerTexts()).toEqual(["5h", "7d", "7d"]);
+});

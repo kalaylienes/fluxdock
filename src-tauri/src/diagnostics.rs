@@ -50,6 +50,13 @@ pub fn save_report(app: &AppHandle) {
     );
     out.push('\n');
 
+    // Which usage windows an account is given varies by plan, and the parsed
+    // payload above cannot show a window that was never sent. This is the raw
+    // thing, so a report from a machine nobody can inspect still settles it.
+    out.push_str("\nlast codex rate limit payload\n");
+    out.push_str(&crate::providers::codex::last_raw_payload().unwrap_or_else(|| "none".into()));
+    out.push('\n');
+
     #[cfg(windows)]
     {
         out.push_str("\nmonitors\n");

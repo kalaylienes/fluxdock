@@ -69,11 +69,13 @@ export function win(
     eta: string | null;
     burn_rate: number | null;
     as_of: string;
+    label: string | null;
   }> = {},
 ) {
   const now = Date.now();
   return {
     utilization,
+    label: extra.label ?? null,
     resets_at: minutesToReset === null ? null : new Date(now + minutesToReset * 60_000).toISOString(),
     source: extra.source ?? "official",
     as_of: extra.as_of ?? new Date(now - 60_000).toISOString(),

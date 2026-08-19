@@ -209,17 +209,36 @@ function Onboarding({ pinned }: { pinned: boolean }) {
   );
 }
 
+/** Long forms for the labels a window can carry. */
+const WINDOW_NAMES: Record<string, string> = {
+  "5h": "five hour",
+  "1d": "daily",
+  "7d": "weekly",
+  "1M": "monthly",
+  "1y": "annual",
+  Op: "Opus weekly",
+  So: "Sonnet weekly",
+};
+
 interface WindowRow {
   key: string;
   label: string;
   window: WindowSnapshot | null;
 }
 
+/**
+ * Only the windows the account actually has. A row for a window that was never
+ * reported used to sit there reading "0% est.", which is a number for a limit
+ * that may not exist. The label comes from the provider when it states how long
+ * the window is, because Codex sends whichever windows a plan has and its first
+ * one is not always five hours.
+ */
 function windowRows(provider: ProviderSnapshot, showModelWeekly: boolean): WindowRow[] {
-  const rows: WindowRow[] = [
-    { key: "5h", label: "5h", window: provider.five_hour },
-    { key: "7d", label: "7d", window: provider.weekly },
-  ];
+  const rows: WindowRow[] = [];
+  if (provider.five_hour)
+    rows.push({ key: "5h", label: provider.five_hour.label ?? "5h", window: provider.five_hour });
+  if (provider.weekly)
+    rows.push({ key: "7d", label: provider.weekly.label ?? "7d", window: provider.weekly });
   if (showModelWeekly) {
     if (provider.weekly_opus) rows.push({ key: "opus", label: "Op", window: provider.weekly_opus });
     if (provider.weekly_sonnet)
@@ -228,9 +247,7 @@ function windowRows(provider: ProviderSnapshot, showModelWeekly: boolean): Windo
   return rows;
 }
 
-function hasWindows(provider: ProviderSnapshot): boolean {
-  return Boolean(provider.five_hour || provider.weekly);
-}
+
 
 interface GroupProps {
   provider: ProviderSnapshot;
@@ -242,11 +259,14 @@ interface GroupProps {
 
 function ProviderGroup({ provider, now, motionOn, compact, showModelWeekly }: GroupProps) {
   const mark = providerMark(provider.id);
+  let rows = windowRows(provider, showModelWeekly);
 
+  // The rows themselves decide whether there is anything to draw, so a provider
+  // can never end up as an empty box with a logo and no bars.
   if (
     provider.status === "cli_not_found" ||
     provider.status === "plan_unsupported" ||
-    !hasWindows(provider)
+    rows.length === 0
   ) {
     return (
       <div className="fd-group">
@@ -263,15 +283,17 @@ function ProviderGroup({ provider, now, motionOn, compact, showModelWeekly }: Gr
     );
   }
 
-  let rows = windowRows(provider, showModelWeekly);
   if (compact) {
-    const five = provider.five_hour;
-    const week = provider.weekly;
-    rows = [
-      (five?.utilization ?? -1) >= (week?.utilization ?? -1)
-        ? { key: "5h", label: "5h", window: five }
-        : { key: "7d", label: "7d", window: week },
-    ];
+    // One row, the window closest to running out.
+    rows = rows
+      .slice(0, 2)
+      .reduce<WindowRow[]>(
+        (best, r) =>
+          best.length === 0 || (r.window?.utilization ?? -1) > (best[0].window?.utilization ?? -1)
+            ? [r]
+            : best,
+        [],
+      );
   }
 
   return (
@@ -311,8 +333,9 @@ function ProviderColumn({
   motionOn: boolean;
 }) {
   const mark = providerMark(provider.id);
+  const rows = windowRows(provider, false);
 
-  if (!hasWindows(provider)) {
+  if (rows.length === 0) {
     return (
       <div className="fd-column fd-column-empty">
         <span className="fd-logo">{mark}</span>
@@ -323,7 +346,7 @@ function ProviderColumn({
 
   return (
     <div className="fd-column">
-      {windowRows(provider, false).map((r, i) => (
+      {rows.map((r, i) => (
         <Row
           key={r.key}
           mark={i === 0 ? mark : null}
@@ -395,7 +418,7 @@ function tooltip(
   w: WindowSnapshot | null,
   now: number,
 ): string {
-  const windowName = label === "5h" ? "five hour" : label === "7d" ? "weekly" : label;
+  const windowName = WINDOW_NAMES[label] ?? label;
   const lines: string[] = [`${p.label}, ${windowName} window`];
 
   if (!w) {

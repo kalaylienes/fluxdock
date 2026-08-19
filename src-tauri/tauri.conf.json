@@ -48,7 +48,7 @@
     "license": "GPL-3.0-or-later",
     "homepage": "https://github.com/kalaylienes/fluxdock",
     "shortDescription": "Claude Code and Codex CLI usage widget",
-    "longDescription": "Shows Claude Code and Codex CLI usage for the five hour and weekly limit windows, floating above the taskbar or pinned into it.",
+    "longDescription": "Shows Claude Code and Codex CLI usage for every limit window your account has, floating above the taskbar or pinned into it.",
     "windows": {
       "nsis": {
         "installMode": "currentUser",
