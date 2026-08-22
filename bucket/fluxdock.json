@@ -4,7 +4,7 @@
     "homepage": "https://github.com/kalaylienes/fluxdock",
     "license": "GPL-3.0-or-later",
     "url": "https://github.com/kalaylienes/fluxdock/releases/download/v1.0.4/FluxDock-1.0.4-portable-x64.zip",
-    "hash": "c6ea31c89df24572a0f76329fe10edeaac52cb79a9e3929d637808ad6a494a58",
+    "hash": "b22b47064e27da1c67a776979e02294bca56221eaa9d55046a667ff18f875a0d",
     "bin": "fluxdock.exe",
     "shortcuts": [
         [
