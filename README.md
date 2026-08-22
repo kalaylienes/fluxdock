@@ -42,7 +42,9 @@ question is answered before you ask it.
   unplugging a display, sleeping, or changing scaling does not strand the widget
   off screen.
 - **Gets out of the way.** Hides automatically while a fullscreen application is
-  in front, including borderless windowed games.
+  in front, including borderless windowed games. On more than one monitor it
+  only hides for a game on its own screen: a widget on the side display stays
+  where it is while the middle one is filled.
 - **Burn rate and time to exhaustion** in the tooltip, alongside the token
   breakdown for the current block.
 - **Threshold notifications** at 70% and 90%, once per window.

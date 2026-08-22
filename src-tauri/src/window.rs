@@ -574,8 +574,11 @@ pub fn spawn_reconciler(app: AppHandle) {
 
             // Read first, because everything below either skips itself or waits
             // while a game is in front.
-            let fullscreen = fullscreen_active();
-            FULLSCREEN_NOW.store(fullscreen, Ordering::Relaxed);
+            // `anywhere` is what the providers ask about, `fullscreen` is what
+            // the widget hides for. The two differ when the game is filling
+            // another monitor.
+            let (anywhere, fullscreen) = fullscreen_state(&app);
+            FULLSCREEN_NOW.store(anywhere, Ordering::Relaxed);
 
             #[cfg(windows)]
             if !fullscreen {
@@ -625,7 +628,10 @@ pub fn spawn_reconciler(app: AppHandle) {
             }
 
             let visible = widget(&app).and_then(|w| w.is_visible().ok()).unwrap_or(false);
-            let motion = visible && !power_saver() && !fullscreen;
+            // Animation stops for a game on any monitor. It is a courtesy to
+            // the frames the game is drawing, and that is not a per display
+            // matter.
+            let motion = visible && !power_saver() && !anywhere;
             if motion != last_motion {
                 last_motion = motion;
                 let state = app.state::<Arc<AppState>>();
@@ -701,12 +707,12 @@ fn power_saver() -> bool {
 /// Only window geometry and that one flag are read. No other process is opened,
 /// no memory is read and nothing is injected anywhere.
 #[cfg(windows)]
-fn fullscreen_active() -> bool {
+fn fullscreen_window() -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_RUNNING_D3D_FULL_SCREEN};
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-    if foreground_covers_monitor() {
-        return true;
+    if let Some(hwnd) = foreground_covering_window() {
+        return Some(hwnd);
     }
 
     let exclusive_d3d = unsafe {
@@ -717,11 +723,80 @@ fn fullscreen_active() -> bool {
     if exclusive_d3d {
         // Such a game does not always measure as covering its monitor, so its
         // window is remembered and rechecked like any other.
-        remember_fullscreen(unsafe { GetForegroundWindow() });
-        return true;
+        let hwnd = unsafe { GetForegroundWindow() };
+        remember_fullscreen(hwnd);
+        return Some(hwnd);
     }
 
-    remembered_still_covers()
+    remembered_covering()
+}
+
+/// Whether a fullscreen application is in front, and whether it is on the same
+/// display as the widget.
+///
+/// On a desk with one monitor those are the same question. On a desk with more
+/// than one they are not: a game filling the middle screen leaves the side
+/// screen alone, and a widget sitting there is in nobody's way, so it stays.
+/// Only the first answer reaches the providers, because starting a process can
+/// flash a console over the game whichever monitor the widget is on.
+#[cfg(windows)]
+fn fullscreen_state(app: &AppHandle) -> (bool, bool) {
+    let Some(hwnd) = fullscreen_window() else {
+        return (false, false);
+    };
+    let ours = widget_monitor(app).map(|m| m.stable_id);
+    let theirs = monitor_of(hwnd).map(|m| m.stable_id);
+    (true, same_display(ours.as_deref(), theirs.as_deref()))
+}
+
+#[cfg(not(windows))]
+fn fullscreen_state(_app: &AppHandle) -> (bool, bool) {
+    (false, false)
+}
+
+/// Are those two the same monitor? An unknown answer counts as yes, which is
+/// the safer half of the mistake: a widget that hides when it need not have is
+/// a moment of confusion, one that stays up over a game costs the player the
+/// game.
+fn same_display(ours: Option<&str>, theirs: Option<&str>) -> bool {
+    match (ours, theirs) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
+/// The monitor the widget is on, read from where the window actually sits
+/// rather than from the setting, because in floating placement the user can
+/// drag it to another screen and the answer has to follow.
+#[cfg(windows)]
+fn widget_monitor(app: &AppHandle) -> Option<crate::monitor::MonitorInfo> {
+    let win = widget(app)?;
+    let pos = win.outer_position().ok()?;
+    let size = win.outer_size().ok()?;
+    let centre = crate::monitor::monitor_at(
+        pos.x + size.width as i32 / 2,
+        pos.y + size.height as i32 / 2,
+    );
+    centre.or_else(|| {
+        let s = app.state::<Arc<AppState>>().settings.get();
+        crate::monitor::resolve(s.widget.monitor_stable_id.as_deref()).map(|(mon, _)| mon)
+    })
+}
+
+/// The monitor a window's centre sits on.
+#[cfg(windows)]
+fn monitor_of(hwnd: windows::Win32::Foundation::HWND) -> Option<crate::monitor::MonitorInfo> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return None;
+    }
+    crate::monitor::monitor_at(
+        rect.left + (rect.right - rect.left) / 2,
+        rect.top + (rect.bottom - rect.top) / 2,
+    )
 }
 
 #[cfg(windows)]
@@ -735,13 +810,13 @@ fn remember_fullscreen(hwnd: windows::Win32::Foundation::HWND) {
 /// it. Closing or minimising the game is, and both are visible here: a closed
 /// window fails `IsWindow`, a minimised one reports a rectangle off screen.
 #[cfg(windows)]
-fn remembered_still_covers() -> bool {
+fn remembered_covering() -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow, IsWindowVisible};
 
     let raw = LAST_FULLSCREEN_HWND.load(Ordering::SeqCst);
     if raw == 0 {
-        return false;
+        return None;
     }
     let hwnd = HWND(raw as *mut std::ffi::c_void);
 
@@ -753,8 +828,9 @@ fn remembered_still_covers() -> bool {
     };
     if !still {
         LAST_FULLSCREEN_HWND.store(0, Ordering::SeqCst);
+        return None;
     }
-    still
+    Some(hwnd)
 }
 
 /// Does this window fill the monitor its centre sits on?
@@ -768,9 +844,7 @@ unsafe fn covers_its_monitor(hwnd: windows::Win32::Foundation::HWND) -> bool {
         return false;
     }
 
-    let cx = rect.left + (rect.right - rect.left) / 2;
-    let cy = rect.top + (rect.bottom - rect.top) / 2;
-    let Some(mon) = crate::monitor::monitor_at(cx, cy) else {
+    let Some(mon) = monitor_of(hwnd) else {
         return false;
     };
 
@@ -782,7 +856,7 @@ unsafe fn covers_its_monitor(hwnd: windows::Win32::Foundation::HWND) -> bool {
 }
 
 #[cfg(windows)]
-fn foreground_covers_monitor() -> bool {
+fn foreground_covering_window() -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetForegroundWindow, IsWindowVisible,
     };
@@ -790,7 +864,7 @@ fn foreground_covers_monitor() -> bool {
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() || !IsWindowVisible(hwnd).as_bool() {
-            return false;
+            return None;
         }
 
         // Plenty of system surfaces cover the whole display without being a
@@ -821,15 +895,15 @@ fn foreground_covers_monitor() -> bool {
                     | "EdgeUiInputTopWndClass"
                     | "LockScreenControllerProxyWindow"
             ) {
-                return false;
+                return None;
             }
         }
 
         if !covers_its_monitor(hwnd) {
-            return false;
+            return None;
         }
         remember_fullscreen(hwnd);
-        true
+        Some(hwnd)
     }
 }
 
@@ -838,7 +912,26 @@ fn power_saver() -> bool {
     false
 }
 
-#[cfg(not(windows))]
-fn fullscreen_active() -> bool {
-    false
+#[cfg(test)]
+mod tests {
+    use super::same_display;
+
+    #[test]
+    fn a_game_on_the_widgets_own_screen_hides_it() {
+        assert!(same_display(Some("LG ULTRAGEAR"), Some("LG ULTRAGEAR")));
+    }
+
+    #[test]
+    fn a_game_on_the_other_screen_leaves_the_widget_alone() {
+        assert!(!same_display(Some("LG ULTRAGEAR"), Some("DELL U2419H")));
+    }
+
+    #[test]
+    fn an_unknown_display_hides_the_widget() {
+        // Either half missing means the comparison could not be made, and the
+        // old behaviour was to hide, so that is what an unknown answer keeps.
+        assert!(same_display(None, Some("LG ULTRAGEAR")));
+        assert!(same_display(Some("LG ULTRAGEAR"), None));
+        assert!(same_display(None, None));
+    }
 }
