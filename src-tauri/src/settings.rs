@@ -131,12 +131,41 @@ impl Default for CodexSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravitySettings {
+    pub enabled: bool,
+}
+
+impl Default for AntigravitySettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderSettings {
     #[serde(default)]
     pub claude: ClaudeSettings,
     #[serde(default)]
     pub codex: CodexSettings,
+    #[serde(default)]
+    pub antigravity: AntigravitySettings,
+}
+
+impl ProviderSettings {
+    /// How many provider columns the layout has to hold. It lives here rather
+    /// than at the call site so that adding a provider cannot leave the taskbar
+    /// strip sized for the ones that came before it.
+    pub fn enabled_count(&self) -> usize {
+        [
+            self.claude.enabled,
+            self.codex.enabled,
+            self.antigravity.enabled,
+        ]
+        .into_iter()
+        .filter(|on| *on)
+        .count()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,6 +345,33 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The taskbar strip is sized from this number, so a provider that is not
+    /// counted is a column drawn outside the window.
+    #[test]
+    fn every_provider_counts_towards_the_strip_width() {
+        let mut providers = ProviderSettings::default();
+        assert_eq!(providers.enabled_count(), 3);
+
+        providers.codex.enabled = false;
+        assert_eq!(providers.enabled_count(), 2);
+
+        providers.claude.enabled = false;
+        providers.antigravity.enabled = false;
+        assert_eq!(providers.enabled_count(), 0);
+    }
+
+    /// A settings file written before Antigravity existed has no section for
+    /// it, and must come back with the provider on rather than missing.
+    #[test]
+    fn a_settings_file_from_before_antigravity_still_enables_it() {
+        let json = r#"{"schema_version":1,"providers":{"claude":{"enabled":true,"credential_paths":[],"show_model_weekly":false,"allow_cli_refresh":true},"codex":{"enabled":false,"allow_http_fallback":false}}}"#;
+        let parsed: Settings = serde_json::from_str(json).expect("parses");
+
+        assert!(parsed.providers.claude.enabled);
+        assert!(!parsed.providers.codex.enabled);
+        assert!(parsed.providers.antigravity.enabled);
+    }
 
     #[test]
     fn a_byte_order_mark_does_not_reset_settings() {

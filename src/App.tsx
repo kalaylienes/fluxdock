@@ -193,7 +193,10 @@ function Onboarding({ pinned }: { pinned: boolean }) {
   return (
     <div className="fd-onboard">
       <div className="fd-onboard-title">No supported CLI found</div>
-      <div>FluxDock tracks Claude Code and Codex CLI usage. Install one and it is picked up.</div>
+      <div>
+        FluxDock tracks Claude Code, Codex CLI and Antigravity usage. Install one and it is
+        picked up.
+      </div>
       <div style={{ display: "flex", gap: 10 }}>
         <span className="fd-link" onClick={() => openUrl("https://claude.com/claude-code")}>
           Claude Code
@@ -203,6 +206,9 @@ function Onboarding({ pinned }: { pinned: boolean }) {
           onClick={() => openUrl("https://developers.openai.com/codex/cli/")}
         >
           Codex CLI
+        </span>
+        <span className="fd-link" onClick={() => openUrl("https://antigravity.google/")}>
+          Antigravity
         </span>
       </div>
     </div>
@@ -218,6 +224,8 @@ const WINDOW_NAMES: Record<string, string> = {
   "1y": "annual",
   Op: "Opus weekly",
   So: "Sonnet weekly",
+  Gem: "Gemini weekly",
+  "3P": "Claude and GPT weekly",
 };
 
 interface WindowRow {

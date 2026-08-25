@@ -67,7 +67,7 @@ static REBUILD_PENDING: AtomicBool = AtomicBool::new(false);
 fn menu_signature(app: &AppHandle) -> String {
     let s = app.state::<Arc<AppState>>().settings.get();
     let mut sig = format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         s.widget.visible,
         s.appearance.animations,
         s.appearance.theme,
@@ -78,6 +78,7 @@ fn menu_signature(app: &AppHandle) -> String {
         s.widget.hide_on_fullscreen,
         s.providers.claude.enabled,
         s.providers.codex.enabled,
+        s.providers.antigravity.enabled,
         s.providers.claude.show_model_weekly,
         s.autostart,
     );
@@ -278,6 +279,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(
             &CheckMenuItemBuilder::with_id("prov:codex", "Codex CLI")
                 .checked(s.providers.codex.enabled)
+                .build(app)?,
+        )
+        .item(
+            &CheckMenuItemBuilder::with_id("prov:antigravity", "Antigravity")
+                .checked(s.providers.antigravity.enabled)
                 .build(app)?,
         )
         .separator()
@@ -524,6 +530,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 state.settings.update(|s| match p.as_str() {
                     "claude" => s.providers.claude.enabled = !s.providers.claude.enabled,
                     "codex" => s.providers.codex.enabled = !s.providers.codex.enabled,
+                    "antigravity" => {
+                        s.providers.antigravity.enabled = !s.providers.antigravity.enabled
+                    }
                     _ => {}
                 });
                 state.request(Refresh::Settings);

@@ -283,7 +283,8 @@ fn session_ending() -> bool {
 fn watch_paths(state: &Arc<AppState>) -> Vec<std::path::PathBuf> {
     let claude = state.claude.blocking_lock().watch_paths();
     let codex = state.codex.blocking_lock().watch_paths();
-    claude.into_iter().chain(codex).collect()
+    let antigravity = state.antigravity.blocking_lock().watch_paths();
+    claude.into_iter().chain(codex).chain(antigravity).collect()
 }
 
 fn init_logging() {

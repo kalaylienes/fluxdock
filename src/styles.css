@@ -18,6 +18,11 @@ html[data-theme="dark"] {
   --codex-core: #a5d2ff;
   --codex-glow: #58a6ff40;
 
+  --antigravity-from: #7c5cd6;
+  --antigravity-to: #9b7ef0;
+  --antigravity-core: #cbb8ff;
+  --antigravity-glow: #9b7ef040;
+
   --surface: #1b1b1beb;
   --track: #ffffff14;
   --border: #ffffff1a;
@@ -38,6 +43,11 @@ html[data-theme="light"] {
   --codex-to: #3b82f6;
   --codex-core: #8cb8f7;
   --codex-glow: #3b82f626;
+
+  --antigravity-from: #6340bd;
+  --antigravity-to: #7c5cd6;
+  --antigravity-core: #b7a2ee;
+  --antigravity-glow: #7c5cd626;
 
   --surface: #f7f7f5eb;
   --track: #00000012;
@@ -172,10 +182,12 @@ body {
 }
 
 .fd-column .fd-label {
-  /* Wide enough for a three character window name such as 12h or 30m, which
-     is what an account with an unusual limit length gets called. */
-  flex: 0 0 20px;
-  width: 20px;
+  /* Wide enough for any three character label, measured against the widest
+     of them rather than the narrowest: 12h and 30m are digits, but a provider
+     that names a row after a model family sends letters, and Gem is wider than
+     both. The four pixels come out of the bar, which is the flexible part. */
+  flex: 0 0 24px;
+  width: 24px;
 }
 
 .fd-column .fd-pct {

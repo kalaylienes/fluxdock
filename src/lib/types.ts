@@ -40,7 +40,7 @@ export interface TokenTotals {
 }
 
 export interface ProviderSnapshot {
-  id: "claude" | "codex";
+  id: "claude" | "codex" | "antigravity";
   label: string;
   enabled: boolean;
   status: ProviderStatus;

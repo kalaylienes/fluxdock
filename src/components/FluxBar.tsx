@@ -24,7 +24,7 @@ const BAND_FADE_END = 40;
 export interface FluxBarProps {
   /** Fill percentage, 0 to 100. */
   value: number;
-  palette: "claude" | "codex";
+  palette: "claude" | "codex" | "antigravity";
   /** Combined result of the animation setting, reduced motion and occlusion. */
   motion: boolean;
   /** Draw the bar as inactive when the snapshot is older than its window. */

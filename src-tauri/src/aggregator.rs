@@ -50,6 +50,11 @@ pub async fn run(
                 .lock()
                 .await
                 .apply_settings(s.providers.codex.clone());
+            state
+                .antigravity
+                .lock()
+                .await
+                .apply_settings(s.providers.antigravity.clone());
             let _ = app.emit("config", state.appearance());
         }
 
@@ -70,6 +75,7 @@ pub async fn cycle(app: &AppHandle, state: &Arc<AppState>, force: bool) {
 
     let claude_enabled = settings.providers.claude.enabled;
     let codex_enabled = settings.providers.codex.enabled;
+    let antigravity_enabled = settings.providers.antigravity.enabled;
 
     let (mut claude_snap, weekly_reset) = if claude_enabled {
         let mut guard = state.claude.lock().await;
@@ -86,10 +92,19 @@ pub async fn cycle(app: &AppHandle, state: &Arc<AppState>, force: bool) {
         None
     };
 
+    let mut antigravity_snap = if antigravity_enabled {
+        Some(state.antigravity.lock().await.poll(force).await)
+    } else {
+        None
+    };
+
     if let Some(s) = claude_snap.as_mut() {
         s.enabled = true;
     }
     if let Some(s) = codex_snap.as_mut() {
+        s.enabled = true;
+    }
+    if let Some(s) = antigravity_snap.as_mut() {
         s.enabled = true;
     }
 
@@ -102,7 +117,10 @@ pub async fn cycle(app: &AppHandle, state: &Arc<AppState>, force: bool) {
         }
     }
 
-    let providers: Vec<_> = [claude_snap, codex_snap].into_iter().flatten().collect();
+    let providers: Vec<_> = [claude_snap, codex_snap, antigravity_snap]
+        .into_iter()
+        .flatten()
+        .collect();
 
     let onboarding = !providers.is_empty()
         && providers
@@ -133,6 +151,10 @@ fn window_name(label: &str) -> String {
         "7d" => "weekly".into(),
         "1M" => "monthly".into(),
         "1y" => "annual".into(),
+        // Antigravity names a bucket after the model family that shares it, so
+        // its rows say which limit ran low rather than how long the window is.
+        "Gem" => "Gemini weekly".into(),
+        "3P" => "Claude and GPT weekly".into(),
         other => format!("{other} usage"),
     }
 }
@@ -314,6 +336,21 @@ pub async fn run_demo(app: AppHandle, state: Arc<AppState>) {
             codex.five_hour = Some(window(ramp(28.0, 100.0), 64));
             codex.weekly = Some(window(ramp(80.0, 100.0), 8300));
             providers.push(codex);
+        }
+
+        if settings.providers.antigravity.enabled {
+            let mut antigravity = ProviderSnapshot::empty("antigravity", "Antigravity");
+            antigravity.status = ProviderStatus::Ok;
+            antigravity.plan_type = Some("demo".into());
+            // Both rows are weekly here, which is what the account actually
+            // has, so the labels rather than the slots say what they are.
+            let mut gemini = window(ramp(12.0, 100.0), 5900);
+            gemini.label = Some("Gem".into());
+            let mut third_party = window(ramp(66.0, 100.0), 5900);
+            third_party.label = Some("3P".into());
+            antigravity.five_hour = Some(gemini);
+            antigravity.weekly = Some(third_party);
+            providers.push(antigravity);
         }
 
         let payload = UsagePayload {

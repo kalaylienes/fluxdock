@@ -133,6 +133,7 @@ test("with no CLI installed the onboarding card takes over", async ({ page }) =>
       [
         provider("claude", { status: "cli_not_found", detail: "Claude Code not found" }),
         provider("codex", { status: "cli_not_found", detail: "Codex CLI not found" }),
+        provider("antigravity", { status: "cli_not_found", detail: "Antigravity not found" }),
       ],
       true,
     ),
@@ -140,7 +141,15 @@ test("with no CLI installed the onboarding card takes over", async ({ page }) =>
 
   await expect(page.locator(".fd-onboard-title")).toBeVisible();
   await expect(page.locator(".fd-row")).toHaveCount(0);
-  await expect(page.locator(".fd-link")).toHaveCount(2);
+  await expect(page.locator(".fd-link")).toHaveCount(3);
+  // The card names every tool it can read, so a fourth link must not push the
+  // row into a second line the window was not sized for.
+  const wrapped = await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll(".fd-link"));
+    const tops = new Set(links.map((el) => Math.round(el.getBoundingClientRect().top)));
+    return tops.size;
+  });
+  expect(wrapped).toBe(1);
 });
 
 test("a re-auth state shows a warning strip", async ({ page }) => {
@@ -392,4 +401,125 @@ test("a derived label and the standing ones sit side by side", async ({ page }) 
 
   await expect(page.locator(".fd-row")).toHaveCount(3);
   expect(await page.locator(".fd-label").allInnerTexts()).toEqual(["5h", "7d", "7d"]);
+});
+
+
+/**
+ * Antigravity has no five hour window at all. Both of its limits are weekly,
+ * one per model family, so the rows are named after the family rather than
+ * after the slot the value travelled in.
+ */
+test("antigravity draws one row per model family, named after the family", async ({ page }) => {
+  await boot(
+    page,
+    payload([
+      provider("antigravity", {
+        five_hour: win(25, 6 * 24 * 60, { label: "Gem" }),
+        weekly: win(0, 6 * 24 * 60, { label: "3P" }),
+        detail: "Gemini Models",
+      }),
+    ]),
+  );
+
+  await expect(page.locator(".fd-row")).toHaveCount(2);
+  expect(await page.locator(".fd-label").allInnerTexts()).toEqual(["Gem", "3P"]);
+  expect(await page.locator(".fd-pct").allInnerTexts()).toEqual(["25%", "0%"]);
+  await expect(page.locator(".fd-pct .fd-est")).toHaveCount(0);
+});
+
+test("three providers stack without crowding either layout", async ({ page }) => {
+  await boot(
+    page,
+    payload([
+      provider("claude", { five_hour: win(34, 134), weekly: win(12, 4000) }),
+      provider("codex", { five_hour: win(5, 47), weekly: win(13, 9000) }),
+      provider("antigravity", {
+        five_hour: win(84, 6 * 24 * 60, { label: "Gem" }),
+        weekly: win(0, 6 * 24 * 60, { label: "3P" }),
+      }),
+    ]),
+  );
+
+  await expect(page.locator(".fd-row")).toHaveCount(6);
+  await expect(page.locator(".fd-group")).toHaveCount(3);
+
+  // The floating window is sized by the backend from what the page reports, so
+  // what has to be checked here is that the page asks for room for all three
+  // rather than that three fit in a window built for two.
+  const asked = await page.evaluate(() => {
+    const calls = (window as any).__FD.calls as Array<{ cmd: string; args: any }>;
+    const heights = calls.filter((c) => c.cmd === "set_content_height").map((c) => c.args.height);
+    return heights[heights.length - 1] ?? null;
+  });
+  expect(asked).toBeGreaterThan(88);
+
+  await page.setViewportSize({ width: 300, height: asked });
+  const overflow = await page.evaluate(() => ({
+    x: document.documentElement.scrollWidth - window.innerWidth,
+    y: document.documentElement.scrollHeight - window.innerHeight,
+  }));
+  expect(overflow.x).toBeLessThanOrEqual(0);
+  expect(overflow.y).toBeLessThanOrEqual(0);
+
+  // The strip is 12 + 3 x 112 + 2 x 16 logical pixels wide for three columns,
+  // which is what monitor::taskbar_width_logical hands the window.
+  await setAppearance(page, { placement: "taskbar" });
+  await expect(page.locator(".fd-column")).toHaveCount(3);
+  await page.setViewportSize({ width: 380, height: 40 });
+  const stripOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(stripOverflow).toBeLessThanOrEqual(0);
+
+  for (const label of await page.locator(".fd-label").all()) {
+    const room = await label.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return el.getBoundingClientRect().width - range.getBoundingClientRect().width;
+    });
+    expect(room).toBeGreaterThan(1);
+  }
+});
+
+/**
+ * The CLI is what serves the numbers, so closing it stops them arriving. The
+ * last reading is kept and greyed rather than dropped, because a weekly figure
+ * from an hour ago is still the best statement anyone has.
+ */
+test("antigravity with the cli closed keeps the last reading, marked stale", async ({ page }) => {
+  await boot(
+    page,
+    payload([
+      provider("antigravity", {
+        status: "stale",
+        detail: "Antigravity not running, last reading 412 min ago",
+        five_hour: win(84, 5 * 24 * 60, { label: "Gem", stale: true }),
+        weekly: win(0, 5 * 24 * 60, { label: "3P", stale: true }),
+      }),
+    ]),
+  );
+
+  await expect(page.locator(".fd-row")).toHaveCount(2);
+  await expect(page.locator(".fd-sheen")).toHaveCount(0);
+
+  // A stale bar is drawn flat: both ends of the gradient are the same colour,
+  // which is what tells it apart from a live one at the same percentage.
+  const stops = await page.locator(".fd-fill").first().evaluate((el) => {
+    const image = getComputedStyle(el).backgroundImage;
+    return image.match(/rgba?\([^)]*\)/g) ?? [];
+  });
+  expect(stops.length).toBeGreaterThanOrEqual(2);
+  expect(new Set(stops).size).toBe(1);
+});
+
+test("antigravity that was never started shows a line, not empty bars", async ({ page }) => {
+  await boot(
+    page,
+    payload([
+      provider("antigravity", { status: "no_data_yet", detail: "Antigravity is not running" }),
+    ]),
+  );
+
+  await expect(page.locator(".fd-row")).toHaveCount(0);
+  await expect(page.locator(".fd-status")).toContainText("Antigravity is not running");
 });

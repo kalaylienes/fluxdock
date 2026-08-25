@@ -1,6 +1,7 @@
 //! Provider abstraction. Adding a source means implementing this trait and
 //! declaring a colour pair; nothing in the core changes.
 
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 

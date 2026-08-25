@@ -28,6 +28,8 @@ pub fn save_report(app: &AppHandle) {
             ".claude/projects",
             ".codex",
             ".codex/sessions",
+            ".gemini/antigravity-cli",
+            ".gemini/antigravity-cli/log",
         ] {
             let present = home.join(rel).exists();
             out.push_str(&format!(
@@ -55,6 +57,11 @@ pub fn save_report(app: &AppHandle) {
     // thing, so a report from a machine nobody can inspect still settles it.
     out.push_str("\nlast codex rate limit payload\n");
     out.push_str(&crate::providers::codex::last_raw_payload().unwrap_or_else(|| "none".into()));
+
+    out.push_str("\n\nlast antigravity quota payload\n");
+    out.push_str(
+        &crate::providers::antigravity::last_raw_payload().unwrap_or_else(|| "none".into()),
+    );
     out.push('\n');
 
     #[cfg(windows)]

@@ -127,10 +127,7 @@ pub fn reposition(app: &AppHandle) {
                         let _ = win.hide();
                         return;
                     }
-                    let columns = [s.providers.claude.enabled, s.providers.codex.enabled]
-                        .iter()
-                        .filter(|on| **on)
-                        .count();
+                    let columns = s.providers.enabled_count();
                     let target = monitor::taskbar_position(&mon, &bar, s.widget.tray_gap, columns);
                     if target.is_none() {
                         // A vertical strip cannot host the layout at all, so

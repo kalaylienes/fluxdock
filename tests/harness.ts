@@ -85,10 +85,19 @@ export function win(
   };
 }
 
-export function provider(id: "claude" | "codex", fields: Record<string, unknown> = {}) {
+const LABELS = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  antigravity: "Antigravity",
+} as const;
+
+export function provider(
+  id: "claude" | "codex" | "antigravity",
+  fields: Record<string, unknown> = {},
+) {
   return {
     id,
-    label: id === "claude" ? "Claude Code" : "Codex CLI",
+    label: LABELS[id],
     enabled: true,
     status: "ok",
     detail: null,

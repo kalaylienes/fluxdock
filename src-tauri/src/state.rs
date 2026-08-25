@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 
 use crate::model::{AppearanceConfig, UsagePayload};
+use crate::providers::antigravity::AntigravityProvider;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::codex::CodexProvider;
 use crate::settings::SettingsStore;
@@ -40,6 +41,7 @@ pub struct AppState {
     pub settings: Arc<SettingsStore>,
     pub claude: Mutex<ClaudeProvider>,
     pub codex: Mutex<CodexProvider>,
+    pub antigravity: Mutex<AntigravityProvider>,
     pub payload: RwLock<Option<UsagePayload>>,
     pub motion_allowed: AtomicBool,
     pub tx: UnboundedSender<Refresh>,
@@ -55,6 +57,7 @@ impl AppState {
                 s.last_seen.claude_seven_day_resets_at,
             )),
             codex: Mutex::new(CodexProvider::new(s.providers.codex.clone())),
+            antigravity: Mutex::new(AntigravityProvider::new(s.providers.antigravity.clone())),
             payload: RwLock::new(None),
             motion_allowed: AtomicBool::new(true),
             settings,

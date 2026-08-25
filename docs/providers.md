@@ -20,18 +20,16 @@ A source qualifies when all three hold:
 | --- | --- | --- |
 | Claude Code | 5 hour, weekly, optional per model weekly | `api/oauth/usage`, with local transcripts for interpolation |
 | Codex CLI | 5 hour, weekly | `token_count` events in rollout transcripts, app server as fallback |
+| Antigravity | one weekly window per model family | `RetrieveUserQuotaSummary` on the CLI's own loopback language server |
 
-Both report server side percentages for two rolling windows, which is exactly
-the shape the widget draws.
+All three report server side percentages for rolling windows, which is exactly
+the shape the widget draws. Antigravity is the one that does not fit the two bar
+pattern: it has no short window at all, and instead splits one weekly limit
+between the Gemini models and the third party ones. The rows are named after the
+families rather than after the window length, because the length is the same for
+both and the family is what tells them apart.
 
 ## Evaluated, not currently supported
-
-**Google Antigravity.** Quota exists and the paid tiers do use a five hour
-window, which fits well. It writes no usage file of its own. Reading the numbers
-means either scraping a port and CSRF token out of the language server's command
-line, or extracting an OAuth client secret from the shipped binary to call an
-internal endpoint. The first is fragile, the second is not something this project
-will do. Worth revisiting if a documented interface appears.
 
 **GitHub Copilot CLI.** An internal endpoint does return quota snapshots, and the
 token is already on disk from the GitHub CLI. Two problems. The quota is a
@@ -85,3 +83,18 @@ Two rules for any adapter:
 - Never recompute a percentage the vendor already reports.
 - Label anything derived locally as an estimate, and keep it visually distinct
   from a server number.
+
+## Reversed
+
+**Google Antigravity** was listed here as not supportable. That verdict was
+written against the editor, and it said the numbers could only be reached by
+scraping a CSRF token out of a command line or lifting an OAuth secret out of a
+binary. The Antigravity CLI, which arrived later, does not work that way. Its
+language server answers `RetrieveUserQuotaSummary` on 127.0.0.1 with no
+credential at all, and the port it listens on is written into the CLI's own log
+file. That is criterion 3 met by the first of its two permitted forms, so the
+provider was built.
+
+The check that keeps it honest: if a future build starts requiring a token on
+that call, the provider gets no answer and says the CLI is not running, rather
+than guessing.

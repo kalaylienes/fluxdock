@@ -1,7 +1,8 @@
 # FluxDock
 
-A small Windows widget that shows how much of your Claude Code and Codex CLI
-limits you have left, one bar per limit window your account actually has.
+A small Windows widget that shows how much of your Claude Code, Codex CLI and
+Google Antigravity limits you have left, one bar per limit window your account
+actually has.
 
 It runs as a floating widget above the taskbar, or pinned into the taskbar strip
 next to the clock.
@@ -31,7 +32,9 @@ question is answered before you ask it.
   to the reset, named by how long the window runs. Claude Code reports a five
   hour and a weekly window. Codex reports whichever windows the plan is given,
   and OpenAI has changed that set before, so the row is labelled from the
-  length the server states rather than from a fixed assumption.
+  length the server states rather than from a fixed assumption. Antigravity
+  shares one weekly limit per model family, so its rows are named after the
+  family instead: `Gem` for the Gemini models, `3P` for the Claude and GPT ones.
 - **Server numbers first.** Claude Code figures come from the official usage
   endpoint. Anything derived locally is marked `est.` so the two are never
   confused.
@@ -145,6 +148,15 @@ counts. They only advance while Codex is running, so the age of a snapshot is
 shown and a bar greys out once it is older than the window it describes. When no
 recent transcript exists, the CLI's app server is asked directly.
 
+**Antigravity.** The Antigravity CLI runs a language server on loopback and
+answers a quota call with the same remaining fraction and reset time its own
+usage view shows. That call needs no credential, and asking does not spend any
+of the quota it reports. The port is different on every start and is written
+into the CLI's own log, which is the only file read. Because the server is the
+CLI, the numbers stop arriving when you close it: the last reading is kept and
+greys out after six hours, since the same account can still be spent from the
+IDE or from another machine.
+
 ![Estimated values are labelled](docs/media/estimates.png)
 
 Reading local files never consumes quota. The only exception is refreshing an
@@ -206,8 +218,10 @@ That file is the useful thing to attach to an issue.
 - Files are read from the CLI directories, never written to.
 - Credentials are read only. FluxDock never writes to a provider's auth file and
   never asks you for a token.
-- Outbound requests go to the provider APIs and nowhere else. There is no
-  update check, no analytics endpoint, and no telemetry of any kind.
+- Outbound requests go to the provider APIs, to the Antigravity CLI's own
+  language server on 127.0.0.1, and to GitHub for the update check. Nothing
+  else. There is no analytics endpoint and no telemetry of any kind, and the
+  update check can be turned off in the tray menu.
 - Prompt and response content is not parsed or stored. Only token counts,
   timestamps and rate limit fields are read.
 - Logs and state stay in `%APPDATA%\FluxDock`.
@@ -286,10 +300,10 @@ FluxDock is a read only status widget for tools that enforce a real quota. It is
 not a cost dashboard, not a proxy between your CLI and the API, and not
 cross platform: the placement logic is written against the Windows shell.
 
-Support is limited to Claude Code and Codex CLI because both expose their limit
-windows through a first party readable source. Other tools were
-evaluated against that bar; see [docs/providers.md](docs/providers.md) for what
-was checked and why each one was or was not a fit.
+Support is limited to Claude Code, Codex CLI and Antigravity because all three
+expose their limit windows through a first party readable source. Other tools
+were evaluated against that bar; see [docs/providers.md](docs/providers.md) for
+what was checked and why each one was or was not a fit.
 
 If you want historical reporting, per project charts, or cost reconciliation,
 tools like [ccusage](https://github.com/ryoppippi/ccusage) cover that well and
