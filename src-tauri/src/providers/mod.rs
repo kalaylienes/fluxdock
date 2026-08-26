@@ -50,8 +50,10 @@ pub fn blocking<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
-/// Spawns a command without flashing a console window.
+/// Spawns a command without flashing a console window. There is no console to
+/// flash anywhere else, which is why the handle only needs to be mutable here.
 pub fn quiet_command(program: &str) -> std::process::Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut cmd = std::process::Command::new(program);
     #[cfg(windows)]
     {

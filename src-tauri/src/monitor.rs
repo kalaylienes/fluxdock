@@ -48,7 +48,9 @@ const MONITORINFOF_PRIMARY: u32 = 1;
 pub const LOGICAL_W: f64 = 300.0;
 
 /// Floating window height before the interface has measured itself. Two
-/// providers with two windows each, which is what a full install shows.
+/// providers with two windows each. It is deliberately not the tallest case:
+/// the interface reports its real height within a frame of the first paint, and
+/// a window that starts too tall shows a band of empty surface until it does.
 pub const DEFAULT_LOGICAL_H: f64 = 88.0;
 
 /// Bounds for a measured height, so a broken measurement cannot produce a
