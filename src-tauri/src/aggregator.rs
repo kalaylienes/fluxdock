@@ -176,7 +176,9 @@ fn check_thresholds(app: &AppHandle, state: &Arc<AppState>, payload: &UsagePaylo
             // provider called the window rather than which field it arrived in.
             // The dedupe key stays on the slot: a label that came and went with
             // a field in the payload would look like a new window and fire the
-            // same warning twice.
+            // same warning twice. A window that moves between slots, which is
+            // what happens when a plan gains or loses its short window, re-fires
+            // once for that reason. That is the cheaper side of the trade.
             let name = window_name(w.label.as_deref().unwrap_or(slot));
             if w.stale {
                 continue;

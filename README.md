@@ -19,12 +19,12 @@ the whole thing fits inside the taskbar strip.</sub>
 
 ## Why
 
-Both tools enforce two limits at once, and the one that stops your work is
-usually not the one you were watching. Checking means interrupting yourself to
+These tools enforce more than one limit at a time, and the one that stops your
+work is usually not the one you were watching. Checking means interrupting yourself to
 run a command, and the answer is stale the moment you go back to work.
 
-FluxDock keeps both windows on screen with a countdown to the next reset, so the
-question is answered before you ask it.
+FluxDock keeps every window your account has on screen with a countdown to its
+reset, so the question is answered before you ask it.
 
 ## Features
 

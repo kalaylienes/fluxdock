@@ -19,7 +19,7 @@ A source qualifies when all three hold:
 | Tool | Windows | Source |
 | --- | --- | --- |
 | Claude Code | 5 hour, weekly, optional per model weekly | `api/oauth/usage`, with local transcripts for interpolation |
-| Codex CLI | 5 hour, weekly | `token_count` events in rollout transcripts, app server as fallback |
+| Codex CLI | whichever windows the plan is given, named from `window_minutes` | `token_count` events in rollout transcripts, app server as fallback |
 | Antigravity | one weekly window per model family | `RetrieveUserQuotaSummary` on the CLI's own loopback language server |
 
 All three report server side percentages for rolling windows, which is exactly

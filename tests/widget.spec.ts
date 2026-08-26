@@ -324,9 +324,11 @@ test("reference screenshots", async ({ page }, testInfo) => {
 
 /**
  * OpenAI took the five hour window away from Plus, Pro and Business in July
- * 2026. What arrives now is a single weekly window, and it arrives in the slot
- * the widget used to call "5h". A row is only drawn for a window the account
- * actually has, and it is named by the length the provider stated.
+ * 2026, and was back for Business accounts by August. An account can have one
+ * window or two, and that line has now moved in both directions, so the widget
+ * assumes neither: a row is only drawn for a window the account actually has,
+ * and it is named by the length the provider stated rather than by the slot the
+ * value arrived in.
  */
 test("a lone weekly window is one row named 7d, not a 5h row at zero", async ({ page }) => {
   await boot(
@@ -386,9 +388,10 @@ test("a provider that states no window length keeps the standing labels", async 
 });
 
 /**
- * The mixed case, which is what a machine in this state actually renders:
- * Claude names its windows in the response so it keeps the standing labels,
- * while Codex is down to one window and says how long it is.
+ * The mixed case. Claude states no window length, so it keeps the standing
+ * labels, while Codex states one and its row is named from that. Codex has a
+ * single weekly window here, which is one of the shapes it sends rather than
+ * the shape.
  */
 test("a derived label and the standing ones sit side by side", async ({ page }) => {
   await boot(

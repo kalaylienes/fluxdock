@@ -45,6 +45,13 @@ pub struct CodexProvider {
     settings: CodexSettings,
     last: Option<RateSnapshot>,
     history: Vec<(DateTime<Utc>, f32)>,
+    /// How long the window the history describes runs for. OpenAI has moved
+    /// this line in both directions: the five hour window was withdrawn from
+    /// several plans in July 2026 and was back for some of them in August. When
+    /// it changes, percentages measured against the old window say nothing
+    /// about the new one, and a burn rate computed across the seam is a number
+    /// with no meaning at all.
+    history_window: Option<i64>,
     next_app_server: Option<DateTime<Utc>>,
 }
 
@@ -81,6 +88,7 @@ impl CodexProvider {
             settings,
             last: None,
             history: Vec::new(),
+            history_window: None,
             next_app_server: None,
         }
     }
@@ -317,6 +325,10 @@ impl UsageProvider for CodexProvider {
             // Burn rate only means anything on the window that moves within a
             // session, so it is tracked for the shortest one.
             let (burn, eta) = if i == 0 {
+                if self.history_window != w.minutes {
+                    self.history.clear();
+                    self.history_window = w.minutes;
+                }
                 self.history.push((rate.at, w.used));
                 let cutoff = now - Duration::hours(6);
                 self.history.retain(|(t, _)| *t > cutoff);
@@ -781,6 +793,38 @@ mod tests {
         assert_eq!(window_label(p.minutes).as_deref(), Some("7d"));
         assert!(s.secondary.is_none());
         assert_eq!(s.plan_type.as_deref(), Some("plus"));
+        assert!(!s.limit_reached);
+    }
+
+    /// The payload above is a real one, recorded while that plan had no five
+    /// hour window and its weekly one arrived in the first slot. It is kept as
+    /// a shape that has to keep parsing, not as a statement about what any plan
+    /// has now: the five hour window was back for Business accounts in August
+    /// 2026, and the fallback has to carry a pair in this dialect too.
+    #[test]
+    fn the_app_server_spelling_carries_a_pair_too() {
+        let v = serde_json::json!({
+            "rateLimits": {
+                "limitId": "codex",
+                "planType": "business",
+                "primary": { "usedPercent": 6, "windowDurationMins": 300, "resetsAt": 1787000000i64 },
+                "secondary": { "usedPercent": 41, "windowDurationMins": 10080, "resetsAt": 1787400000i64 }
+            }
+        });
+        let s = parse_rate_limits(&v, Utc::now(), None).expect("parses");
+        let out = ordered_windows(&s);
+
+        assert_eq!(
+            out.iter().map(|w| (w.minutes, w.used)).collect::<Vec<_>>(),
+            vec![(Some(300), 6.0), (Some(10080), 41.0)]
+        );
+        assert_eq!(
+            out.iter()
+                .map(|w| window_label(w.minutes))
+                .collect::<Vec<_>>(),
+            vec![Some("5h".into()), Some("7d".into())]
+        );
+        assert_eq!(s.plan_type.as_deref(), Some("business"));
         assert!(!s.limit_reached);
     }
 
