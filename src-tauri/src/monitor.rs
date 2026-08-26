@@ -314,6 +314,20 @@ pub fn mostly_inside(monitor: &MonitorInfo, x: i32, y: i32, w: i32, h: i32) -> b
     intersect_area(&rect, &monitor.work) * 2 >= area
 }
 
+/// The monitor whose bounds contain this point, or nothing.
+///
+/// `monitor_at` cannot answer nothing: on Windows it asks `MonitorFromPoint`
+/// with `MONITOR_DEFAULTTOPRIMARY`, which substitutes the primary display for a
+/// point that is off the desktop. That is the right answer when the question is
+/// "where should this window go" and the wrong one when it is "which display is
+/// this on", because a gap in a non rectangular arrangement comes back as a
+/// confident primary.
+pub fn containing(monitors: &[MonitorInfo], x: i32, y: i32) -> Option<&MonitorInfo> {
+    monitors.iter().find(|m| {
+        x >= m.bounds.left && x < m.bounds.right && y >= m.bounds.top && y < m.bounds.bottom
+    })
+}
+
 fn intersect_area(a: &Rect, b: &Rect) -> i64 {
     let l = a.left.max(b.left);
     let t = a.top.max(b.top);
@@ -914,8 +928,59 @@ fn edid_display_name(edid: &[u8]) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The desk this widget is actually developed on: one 2560x1440 landscape
+    /// display at the origin with a reserved taskbar strip, and one portrait
+    /// display to the left of it, offset vertically. The offset is the point:
+    /// the two do not share a top edge, so there is a gap above and below the
+    /// overlap that belongs to no display at all.
+    pub(crate) fn desk() -> Vec<MonitorInfo> {
+        vec![
+            MonitorInfo {
+                stable_id: "LG".into(),
+                friendly_name: "LG ULTRAGEAR".into(),
+                gdi_name: r"\\.\DISPLAY1".into(),
+                primary: true,
+                work: Rect::from_size(0, 0, 2560, 1392),
+                bounds: Rect::from_size(0, 0, 2560, 1440),
+                dpi: 96,
+            },
+            MonitorInfo {
+                stable_id: "PORT".into(),
+                friendly_name: "Portrait".into(),
+                gdi_name: r"\\.\DISPLAY5".into(),
+                primary: false,
+                work: Rect::from_size(-1080, -441, 1080, 1920),
+                bounds: Rect::from_size(-1080, -441, 1080, 1920),
+                dpi: 96,
+            },
+        ]
+    }
+
+    /// `containing` is allowed to say nothing, which is the whole reason it
+    /// exists next to `monitor_at`.
+    #[test]
+    fn a_point_in_the_gap_between_two_screens_belongs_to_neither() {
+        let desk = desk();
+        assert!(containing(&desk, 1000, -250).is_none());
+        assert_eq!(
+            containing(&desk, 100, 100).map(|m| m.stable_id.as_str()),
+            Some("LG")
+        );
+        assert_eq!(
+            containing(&desk, -500, 100).map(|m| m.stable_id.as_str()),
+            Some("PORT")
+        );
+        // A shared edge belongs to exactly one display: right and bottom are
+        // exclusive, so the pixel at x=0 is the landscape one's.
+        assert_eq!(
+            containing(&desk, 0, 700).map(|m| m.stable_id.as_str()),
+            Some("LG")
+        );
+        assert!(containing(&desk, 2560, 700).is_none());
+    }
 
     /// A minimal but structurally real EDID: the magic header, ACME as the
     /// vendor, product 0x1234, serial 0xDEADBEEF, and a display name

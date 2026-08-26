@@ -43,6 +43,17 @@ static AUTO_HIDDEN: AtomicBool = AtomicBool::new(false);
 /// every path that starts one checks this first.
 static FULLSCREEN_NOW: AtomicBool = AtomicBool::new(false);
 
+/// Which branch of the sensor accepted the window that is being hidden for,
+/// appended to the log line. Two of the descriptions already in the log name a
+/// window that was merely in front at that instant rather than one that covered
+/// anything, and there was no way to tell that from the line itself.
+static FULLSCREEN_SOURCE: parking_lot::Mutex<&'static str> = parking_lot::Mutex::new("unknown");
+
+/// The last thing the sensor said at debug level. The loop runs at nearly three
+/// times a second, so an unconditional line would bury a day of real events in
+/// one minute of the same sentence.
+static LAST_SENSOR_NOTE: parking_lot::Mutex<String> = parking_lot::Mutex::new(String::new());
+
 /// The window last seen covering its monitor, kept as the raw pointer value.
 /// A game that loses the foreground for a moment is still a game.
 #[cfg(windows)]
@@ -369,43 +380,131 @@ pub fn foreground_for_menu(_window: &tauri::WebviewWindow) {}
 fn apply_fullscreen_hiding(app: &AppHandle, fullscreen: bool, stable_clear: bool) {
     let state = app.state::<Arc<AppState>>();
     let s = state.settings.get();
-
-    if !s.widget.hide_on_fullscreen {
-        if AUTO_HIDDEN.swap(false, Ordering::SeqCst) && s.widget.visible {
-            if let Some(win) = widget(app) {
-                let _ = win.show();
-            }
-        }
-        return;
-    }
-
     let Some(win) = widget(app) else { return };
 
-    if fullscreen {
-        // Asking for the widget outranks hiding it. Without this, showing it
-        // from the tray while something is detected as fullscreen puts it back
-        // within a third of a second, and the menu item looks broken with no
-        // way to tell why.
-        if SHOWN_ON_PURPOSE.load(Ordering::SeqCst) {
-            return;
-        }
-        if !AUTO_HIDDEN.load(Ordering::SeqCst) && win.is_visible().unwrap_or(false) {
-            tracing::info!("hiding the widget behind {}", fullscreen_window_description());
-            let _ = win.hide();
-            AUTO_HIDDEN.store(true, Ordering::SeqCst);
-        }
-    } else if stable_clear {
+    let decision = HideDecision {
+        enabled: s.widget.hide_on_fullscreen,
+        fullscreen,
+        stable_clear,
+        shown_on_purpose: SHOWN_ON_PURPOSE.load(Ordering::SeqCst),
+        auto_hidden: AUTO_HIDDEN.load(Ordering::SeqCst),
+        widget_on_screen: win.is_visible().unwrap_or(false),
+        visible_by_choice: s.widget.visible,
+    };
+    let action = decision.action();
+
+    // The flags the rule reads are cleared here rather than inside it, so the
+    // rule itself stays a function of its inputs and can be tested without a
+    // window, a display or a settings file.
+    if !decision.enabled {
+        AUTO_HIDDEN.store(false, Ordering::SeqCst);
+    } else if !fullscreen && stable_clear {
         // The override lasts for one fullscreen stretch, so the next game hides
         // the widget again without the user having to undo anything.
         SHOWN_ON_PURPOSE.store(false, Ordering::SeqCst);
+        AUTO_HIDDEN.store(false, Ordering::SeqCst);
+    }
 
-        if AUTO_HIDDEN.swap(false, Ordering::SeqCst) && s.widget.visible {
-            tracing::info!("fullscreen ended, restoring the widget");
+    match action {
+        HideAction::Nothing => {}
+        HideAction::Hide => {
+            tracing::info!(
+                "hiding the widget behind {} ({})",
+                fullscreen_window_description(),
+                FULLSCREEN_SOURCE.lock()
+            );
+            let _ = win.hide();
+            AUTO_HIDDEN.store(true, Ordering::SeqCst);
+        }
+        HideAction::Restore => {
+            if decision.enabled {
+                tracing::info!("fullscreen ended, restoring the widget");
+            } else {
+                tracing::info!("fullscreen hiding turned off, restoring the widget");
+            }
             reposition(app);
             let _ = win.show();
             let _ = win.set_always_on_top(true);
             apply_ex_styles(app);
         }
+    }
+}
+
+/// What the hiding rule decided this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HideAction {
+    Nothing,
+    Hide,
+    Restore,
+}
+
+/// Everything the rule depends on, gathered in one place.
+///
+/// The rule had never been tested, because reading it meant reading four atomic
+/// flags, a settings file and a window handle at once. Every field here is one
+/// of those, and `action` is the whole of the decision.
+#[derive(Debug, Clone, Copy)]
+struct HideDecision {
+    /// The `hide_on_fullscreen` setting.
+    enabled: bool,
+    /// Something fullscreen is in front, on a display the widget shares.
+    fullscreen: bool,
+    /// Nothing has been fullscreen for long enough to trust.
+    stable_clear: bool,
+    /// The user asked for the widget while something fullscreen was in front.
+    shown_on_purpose: bool,
+    /// The widget is hidden by this rule rather than by the user.
+    auto_hidden: bool,
+    widget_on_screen: bool,
+    /// The user's own visibility preference.
+    visible_by_choice: bool,
+}
+
+impl Default for HideDecision {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            fullscreen: false,
+            stable_clear: false,
+            shown_on_purpose: false,
+            auto_hidden: false,
+            widget_on_screen: false,
+            visible_by_choice: false,
+        }
+    }
+}
+
+impl HideDecision {
+    fn action(self) -> HideAction {
+        if !self.enabled {
+            // A widget this rule had hidden has to come back when the rule is
+            // switched off, or it stays gone with the switch that hid it now
+            // in the off position.
+            return if self.auto_hidden && self.visible_by_choice {
+                HideAction::Restore
+            } else {
+                HideAction::Nothing
+            };
+        }
+
+        if self.fullscreen {
+            // Asking for the widget outranks hiding it. Without this, showing
+            // it from the tray while something is detected as fullscreen puts
+            // it back within a third of a second, and the menu item looks
+            // broken with no way to tell why.
+            if self.shown_on_purpose {
+                return HideAction::Nothing;
+            }
+            if !self.auto_hidden && self.widget_on_screen {
+                return HideAction::Hide;
+            }
+            return HideAction::Nothing;
+        }
+
+        if self.stable_clear && self.auto_hidden && self.visible_by_choice {
+            return HideAction::Restore;
+        }
+        HideAction::Nothing
     }
 }
 
@@ -709,11 +808,14 @@ fn power_saver() -> bool {
 /// Only window geometry and that one flag are read. No other process is opened,
 /// no memory is read and nothing is injected anywhere.
 #[cfg(windows)]
-fn fullscreen_window() -> Option<windows::Win32::Foundation::HWND> {
+fn fullscreen_window(
+    monitors: &[crate::monitor::MonitorInfo],
+) -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_RUNNING_D3D_FULL_SCREEN};
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-    if let Some(hwnd) = foreground_covering_window() {
+    if let Some(hwnd) = foreground_covering_window(monitors) {
+        *FULLSCREEN_SOURCE.lock() = "geometry";
         return Some(hwnd);
     }
 
@@ -727,10 +829,15 @@ fn fullscreen_window() -> Option<windows::Win32::Foundation::HWND> {
         // window is remembered and rechecked like any other.
         let hwnd = unsafe { GetForegroundWindow() };
         remember_fullscreen(hwnd);
+        *FULLSCREEN_SOURCE.lock() = "exclusive d3d";
         return Some(hwnd);
     }
 
-    remembered_covering()
+    let remembered = remembered_covering(monitors);
+    if remembered.is_some() {
+        *FULLSCREEN_SOURCE.lock() = "remembered";
+    }
+    remembered
 }
 
 /// Whether a fullscreen application is in front, and whether it is on the same
@@ -743,12 +850,30 @@ fn fullscreen_window() -> Option<windows::Win32::Foundation::HWND> {
 /// flash a console over the game whichever monitor the widget is on.
 #[cfg(windows)]
 fn fullscreen_state(app: &AppHandle) -> (bool, bool) {
-    let Some(hwnd) = fullscreen_window() else {
+    // Once per tick. Enumerating displays reaches QueryDisplayConfig, and the
+    // sensor used to ask for the list up to three times on its way to one
+    // answer.
+    let monitors = crate::monitor::enumerate();
+
+    let Some(hwnd) = fullscreen_window(&monitors) else {
         return (false, false);
     };
-    let ours = widget_monitor(app).map(|m| m.stable_id);
-    let theirs = monitor_of(hwnd).map(|m| m.stable_id);
-    (true, same_display(ours.as_deref(), theirs.as_deref()))
+    let Some(rect) = rect_of(hwnd) else {
+        return (false, false);
+    };
+    let covered = covered_or_centre(&rect, &monitors);
+    let ours = widget_monitor(app, &monitors).map(|m| m.stable_id.clone());
+    let hides = hides_our_display(ours.as_deref(), &covered);
+
+    sensor_note(format!(
+        "{} covers [{}], widget on {}, {}",
+        fullscreen_window_description(),
+        display_names(&covered),
+        ours.as_deref().unwrap_or("an unknown display"),
+        if hides { "hiding" } else { "staying" }
+    ));
+
+    (true, hides)
 }
 
 /// The same two questions, asked over X11. A native Wayland session cannot
@@ -761,48 +886,137 @@ fn fullscreen_state(app: &AppHandle) -> (bool, bool) {
         return (false, false);
     };
     *LAST_FULLSCREEN_DESCRIPTION.lock() = Some(description);
+    *FULLSCREEN_SOURCE.lock() = "x11";
 
-    let ours = widget_monitor(app).map(|m| m.stable_id);
-    let theirs = crate::monitor::monitor_at(
+    let monitors = crate::monitor::enumerate();
+    let covered = covered_or_centre(&rect, &monitors);
+    let ours = widget_monitor(app, &monitors).map(|m| m.stable_id.clone());
+    let hides = hides_our_display(ours.as_deref(), &covered);
+
+    sensor_note(format!(
+        "covers [{}], widget on {}, {}",
+        display_names(&covered),
+        ours.as_deref().unwrap_or("an unknown display"),
+        if hides { "hiding" } else { "staying" }
+    ));
+
+    (true, hides)
+}
+
+/// Compositor rounding, not a deliberate gap. A maximised window misses its
+/// monitor by tens of pixels, so this is nowhere near wide enough to admit one.
+const COVER_SLACK_PX: i32 = 2;
+
+/// Every display this rectangle covers entirely.
+///
+/// A window is no longer attributed to one display. It used to be judged
+/// against the monitor under its centre, which is an arbitrary choice for a
+/// window opened across two of them: the centre lands on one, and a widget
+/// sitting on the other stayed up over a surface that had taken its whole
+/// screen. Staying out of the way is owed to every display the window covers.
+fn covered_monitors<'a>(
+    rect: &crate::monitor::Rect,
+    monitors: &'a [crate::monitor::MonitorInfo],
+) -> Vec<&'a crate::monitor::MonitorInfo> {
+    monitors
+        .iter()
+        .filter(|m| {
+            let b = m.bounds;
+            rect.left <= b.left + COVER_SLACK_PX
+                && rect.top <= b.top + COVER_SLACK_PX
+                && rect.right >= b.right - COVER_SLACK_PX
+                && rect.bottom >= b.bottom - COVER_SLACK_PX
+        })
+        .collect()
+}
+
+/// The displays a window covers, or the one under its centre when it covers
+/// none.
+///
+/// Only ever asked about a window some branch has already accepted. The
+/// exclusive Direct3D branch and the X11 declared-fullscreen branch both hand
+/// over windows that measure as covering nothing at all: the log has a real
+/// game reporting a one pixel rectangle. Those keep the centre display answer
+/// they have always had. Whether a window qualifies in the first place is a
+/// different question, and `covered_monitors` alone answers it.
+fn covered_or_centre<'a>(
+    rect: &crate::monitor::Rect,
+    monitors: &'a [crate::monitor::MonitorInfo],
+) -> Vec<&'a crate::monitor::MonitorInfo> {
+    let covered = covered_monitors(rect, monitors);
+    if !covered.is_empty() {
+        return covered;
+    }
+    crate::monitor::containing(
+        monitors,
         rect.left + (rect.right - rect.left) / 2,
         rect.top + (rect.bottom - rect.top) / 2,
     )
-    .map(|m| m.stable_id);
-
-    (true, same_display(ours.as_deref(), theirs.as_deref()))
+    .into_iter()
+    .collect()
 }
 
-/// Are those two the same monitor? An unknown answer counts as yes, which is
-/// the safer half of the mistake: a widget that hides when it need not have is
-/// a moment of confusion, one that stays up over a game costs the player the
-/// game.
-fn same_display(ours: Option<&str>, theirs: Option<&str>) -> bool {
-    match (ours, theirs) {
-        (Some(a), Some(b)) => a == b,
-        _ => true,
+/// Is the widget's own display one of the ones being covered?
+///
+/// A widget whose display cannot be worked out counts as covered, which is the
+/// safer half of the mistake: a widget that hides when it need not have is a
+/// moment of confusion, one that stays up over a game costs the player the
+/// game. A covered set that came back empty is the opposite case and never
+/// hides, because a sensor answer that degraded to nothing must not produce a
+/// disappearance nobody can explain.
+fn hides_our_display(ours: Option<&str>, covered: &[&crate::monitor::MonitorInfo]) -> bool {
+    match ours {
+        Some(id) => covered.iter().any(|m| m.stable_id == id),
+        None => true,
     }
+}
+
+/// Emits a sensor line, but only when it says something new.
+fn sensor_note(note: String) {
+    let mut last = LAST_SENSOR_NOTE.lock();
+    if *last == note {
+        return;
+    }
+    tracing::debug!("sensor: {note}");
+    *last = note;
+}
+
+/// Displays by the name a person would recognise. `stable_id` is a device path
+/// on Windows and an EDID string on Linux, and neither belongs in a log line
+/// somebody has to read.
+fn display_names(monitors: &[&crate::monitor::MonitorInfo]) -> String {
+    monitors
+        .iter()
+        .map(|m| m.friendly_name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The monitor the widget is on, read from where the window actually sits
 /// rather than from the setting, because in floating placement the user can
 /// drag it to another screen and the answer has to follow.
-fn widget_monitor(app: &AppHandle) -> Option<crate::monitor::MonitorInfo> {
+fn widget_monitor<'a>(
+    app: &AppHandle,
+    monitors: &'a [crate::monitor::MonitorInfo],
+) -> Option<&'a crate::monitor::MonitorInfo> {
     let win = widget(app)?;
     let pos = win.outer_position().ok()?;
     let size = win.outer_size().ok()?;
-    let centre = crate::monitor::monitor_at(
+    let centre = crate::monitor::containing(
+        monitors,
         pos.x + size.width as i32 / 2,
         pos.y + size.height as i32 / 2,
     );
     centre.or_else(|| {
         let s = app.state::<Arc<AppState>>().settings.get();
-        crate::monitor::resolve(s.widget.monitor_stable_id.as_deref()).map(|(mon, _)| mon)
+        let id = s.widget.monitor_stable_id.clone()?;
+        monitors.iter().find(|m| m.stable_id == id)
     })
 }
 
-/// The monitor a window's centre sits on.
+/// A foreign window's rectangle, in the same shape everything else uses.
 #[cfg(windows)]
-fn monitor_of(hwnd: windows::Win32::Foundation::HWND) -> Option<crate::monitor::MonitorInfo> {
+fn rect_of(hwnd: windows::Win32::Foundation::HWND) -> Option<crate::monitor::Rect> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
@@ -810,10 +1024,7 @@ fn monitor_of(hwnd: windows::Win32::Foundation::HWND) -> Option<crate::monitor::
     if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
         return None;
     }
-    crate::monitor::monitor_at(
-        rect.left + (rect.right - rect.left) / 2,
-        rect.top + (rect.bottom - rect.top) / 2,
-    )
+    Some(rect.into())
 }
 
 #[cfg(windows)]
@@ -827,7 +1038,9 @@ fn remember_fullscreen(hwnd: windows::Win32::Foundation::HWND) {
 /// it. Closing or minimising the game is, and both are visible here: a closed
 /// window fails `IsWindow`, a minimised one reports a rectangle off screen.
 #[cfg(windows)]
-fn remembered_covering() -> Option<windows::Win32::Foundation::HWND> {
+fn remembered_covering(
+    monitors: &[crate::monitor::MonitorInfo],
+) -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow, IsWindowVisible};
 
@@ -841,7 +1054,7 @@ fn remembered_covering() -> Option<windows::Win32::Foundation::HWND> {
         IsWindow(Some(hwnd)).as_bool()
             && IsWindowVisible(hwnd).as_bool()
             && !IsIconic(hwnd).as_bool()
-            && covers_its_monitor(hwnd)
+            && covers_a_display(hwnd, monitors)
     };
     if !still {
         LAST_FULLSCREEN_HWND.store(0, Ordering::SeqCst);
@@ -850,32 +1063,27 @@ fn remembered_covering() -> Option<windows::Win32::Foundation::HWND> {
     Some(hwnd)
 }
 
-/// Does this window fill the monitor its centre sits on?
+/// Does this window fill a whole display?
+///
+/// It used to ask whether the window filled the display under its own centre,
+/// which is the same question on one screen and a narrower one on several.
 #[cfg(windows)]
-unsafe fn covers_its_monitor(hwnd: windows::Win32::Foundation::HWND) -> bool {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
-
-    let mut rect = RECT::default();
-    if GetWindowRect(hwnd, &mut rect).is_err() {
-        return false;
+fn covers_a_display(
+    hwnd: windows::Win32::Foundation::HWND,
+    monitors: &[crate::monitor::MonitorInfo],
+) -> bool {
+    match rect_of(hwnd) {
+        Some(rect) => !covered_monitors(&rect, monitors).is_empty(),
+        None => false,
     }
-
-    let Some(mon) = monitor_of(hwnd) else {
-        return false;
-    };
-
-    let b = mon.bounds;
-    rect.left <= b.left + 2
-        && rect.top <= b.top + 2
-        && rect.right >= b.right - 2
-        && rect.bottom >= b.bottom - 2
 }
 
 #[cfg(windows)]
-fn foreground_covering_window() -> Option<windows::Win32::Foundation::HWND> {
+fn foreground_covering_window(
+    monitors: &[crate::monitor::MonitorInfo],
+) -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetForegroundWindow, IsWindowVisible,
+        GetClassNameW, GetForegroundWindow, GetWindowTextW, IsWindowVisible,
     };
 
     unsafe {
@@ -912,13 +1120,33 @@ fn foreground_covering_window() -> Option<windows::Win32::Foundation::HWND> {
                     | "EdgeUiInputTopWndClass"
                     | "LockScreenControllerProxyWindow"
             ) {
+                sensor_note(format!("foreground {name}, a shell surface, ignored"));
                 return None;
             }
-        }
 
-        if !covers_its_monitor(hwnd) {
+            // Everything below wants to name the window it is talking about,
+            // and this is the only place that has the class to hand.
+            let mut title = [0u16; 128];
+            let title_len = GetWindowTextW(hwnd, &mut title);
+            let title =
+                String::from_utf16_lossy(&title[..(title_len.max(0) as usize).min(title.len())]);
+
+            let rect = rect_of(hwnd)?;
+            let covered = covered_monitors(&rect, monitors);
+            if covered.is_empty() {
+                sensor_note(format!(
+                    "foreground {name} \"{title}\" at {},{} {}x{} covers no display",
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top
+                ));
+                return None;
+            }
+        } else if !covers_a_display(hwnd, monitors) {
             return None;
         }
+
         remember_fullscreen(hwnd);
         Some(hwnd)
     }
@@ -931,24 +1159,254 @@ fn power_saver() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::same_display;
+    use super::*;
+    use crate::monitor::tests::desk;
+    use crate::monitor::Rect;
+
+    fn ids<'a>(monitors: &[&'a crate::monitor::MonitorInfo]) -> Vec<&'a str> {
+        monitors.iter().map(|m| m.stable_id.as_str()).collect()
+    }
+
+    /// The rectangle every geometry path hide in the log has: flush to the
+    /// landscape display on all four sides.
+    const FILLS_LG: Rect = Rect {
+        left: 0,
+        top: 0,
+        right: 2560,
+        bottom: 1440,
+    };
 
     #[test]
-    fn a_game_on_the_widgets_own_screen_hides_it() {
-        assert!(same_display(Some("LG ULTRAGEAR"), Some("LG ULTRAGEAR")));
+    fn a_game_filling_one_screen_covers_only_that_screen() {
+        assert_eq!(ids(&covered_monitors(&FILLS_LG, &desk())), vec!["LG"]);
+    }
+
+    /// The case the centre point rule got wrong. A window opened across both
+    /// displays has one centre, so it used to be attributed to one of them and
+    /// a widget on the other stayed up over it.
+    #[test]
+    fn a_window_opened_across_both_screens_covers_both() {
+        let across = Rect {
+            left: -1080,
+            top: -441,
+            right: 2560,
+            bottom: 1479,
+        };
+        let desk = desk();
+        let covered = covered_monitors(&across, &desk);
+        assert_eq!(covered.len(), 2);
+        assert!(ids(&covered).contains(&"LG"));
+        assert!(ids(&covered).contains(&"PORT"));
+    }
+
+    /// The literal rectangle of the one maximised window in the log, a
+    /// PowerShell console at -8,-8 2576x1408. It misses the bottom edge by
+    /// forty pixels, which is the taskbar, and must never read as fullscreen.
+    #[test]
+    fn a_maximised_window_covers_nothing() {
+        let maximised = Rect {
+            left: -8,
+            top: -8,
+            right: 2568,
+            bottom: 1400,
+        };
+        assert!(covered_monitors(&maximised, &desk()).is_empty());
     }
 
     #[test]
+    fn two_pixels_of_rounding_still_counts_as_covering_and_three_does_not() {
+        let short = |by: i32| Rect {
+            left: 0,
+            top: 0,
+            right: 2560,
+            bottom: 1440 - by,
+        };
+        assert_eq!(ids(&covered_monitors(&short(2), &desk())), vec!["LG"]);
+        assert!(covered_monitors(&short(3), &desk()).is_empty());
+
+        let inset = Rect {
+            left: 2,
+            top: 2,
+            right: 2558,
+            bottom: 1438,
+        };
+        assert_eq!(ids(&covered_monitors(&inset, &desk())), vec!["LG"]);
+    }
+
+    /// An exclusive fullscreen game does not always measure as covering
+    /// anything: the log has one reporting a single pixel at 1280,720. That
+    /// window arrives already accepted, so it keeps the centre display answer.
+    #[test]
+    fn a_game_that_measures_as_nothing_keeps_its_centre_screen() {
+        let pixel = Rect {
+            left: 1280,
+            top: 720,
+            right: 1281,
+            bottom: 721,
+        };
+        assert!(covered_monitors(&pixel, &desk()).is_empty());
+        assert_eq!(ids(&covered_or_centre(&pixel, &desk())), vec!["LG"]);
+    }
+
+    #[test]
+    fn a_game_on_the_widgets_own_screen_hides_it() {
+        let desk = desk();
+        let covered = covered_monitors(&FILLS_LG, &desk);
+        assert!(hides_our_display(Some("LG"), &covered));
+    }
+
+    /// The rule 1.0.4 added, unchanged: a game filling one screen leaves a
+    /// widget on the other one alone.
+    #[test]
     fn a_game_on_the_other_screen_leaves_the_widget_alone() {
-        assert!(!same_display(Some("LG ULTRAGEAR"), Some("DELL U2419H")));
+        let desk = desk();
+        let covered = covered_monitors(&FILLS_LG, &desk);
+        assert!(!hides_our_display(Some("PORT"), &covered));
+    }
+
+    #[test]
+    fn a_window_across_both_screens_hides_the_widget_wherever_it_sits() {
+        let desk = desk();
+        let across = Rect {
+            left: -1080,
+            top: -441,
+            right: 2560,
+            bottom: 1479,
+        };
+        let covered = covered_monitors(&across, &desk);
+        assert!(hides_our_display(Some("LG"), &covered));
+        assert!(hides_our_display(Some("PORT"), &covered));
     }
 
     #[test]
     fn an_unknown_display_hides_the_widget() {
-        // Either half missing means the comparison could not be made, and the
-        // old behaviour was to hide, so that is what an unknown answer keeps.
-        assert!(same_display(None, Some("LG ULTRAGEAR")));
-        assert!(same_display(Some("LG ULTRAGEAR"), None));
-        assert!(same_display(None, None));
+        let desk = desk();
+        let covered = covered_monitors(&FILLS_LG, &desk);
+        // The widget's own display could not be worked out. Hiding is the
+        // safer half of that mistake.
+        assert!(hides_our_display(None, &covered));
+        // An empty covered set is the opposite case: the sensor degraded to
+        // nothing, and a disappearance nobody can explain is worse than a
+        // widget left where it was.
+        assert!(!hides_our_display(Some("LG"), &[]));
+    }
+
+    /// Every hide this widget has actually performed, taken from the two log
+    /// files that exist, run through the new rule. If one of these stops
+    /// qualifying, the change went too far.
+    #[test]
+    fn every_hide_this_widget_has_done_still_hides() {
+        let desk = desk();
+        let cases: &[(&str, Rect)] = &[
+            ("R6Game", FILLS_LG),
+            ("UnityWndClass", FILLS_LG),
+            ("Chrome_WidgetWin_1", FILLS_LG),
+            (
+                "RiotWindowClass",
+                Rect {
+                    left: 1280,
+                    top: 720,
+                    right: 1281,
+                    bottom: 721,
+                },
+            ),
+        ];
+        for (class, rect) in cases {
+            let covered = covered_or_centre(rect, &desk);
+            assert_eq!(ids(&covered), vec!["LG"], "{class} stopped hiding");
+            assert!(hides_our_display(Some("LG"), &covered), "{class}");
+        }
+
+        // The one entry in the log that is not a fullscreen window at all. It
+        // only ever reached the log through the exclusive Direct3D branch,
+        // which names whatever was in front rather than what covered the
+        // screen, and the geometry gate rejects it either way.
+        let powershell = Rect {
+            left: -8,
+            top: -8,
+            right: 2568,
+            bottom: 1400,
+        };
+        assert!(covered_monitors(&powershell, &desk).is_empty());
+    }
+
+    #[test]
+    fn asking_for_the_widget_outranks_hiding_it() {
+        let shown_on_purpose = HideDecision {
+            fullscreen: true,
+            shown_on_purpose: true,
+            ..HideDecision::default()
+        };
+        assert_eq!(shown_on_purpose.action(), HideAction::Nothing);
+    }
+
+    #[test]
+    fn a_fullscreen_window_hides_a_visible_widget_once() {
+        let first = HideDecision {
+            fullscreen: true,
+            widget_on_screen: true,
+            ..HideDecision::default()
+        };
+        assert_eq!(first.action(), HideAction::Hide);
+
+        let already = HideDecision {
+            auto_hidden: true,
+            ..first
+        };
+        assert_eq!(already.action(), HideAction::Nothing);
+    }
+
+    /// The widget does not come back the instant the game lets go of the
+    /// foreground. Anything that flashes in front, an installer or a scheduled
+    /// task, would otherwise raise a topmost window over a game and cost it its
+    /// fullscreen mode.
+    #[test]
+    fn the_widget_waits_before_coming_back() {
+        let settling = HideDecision {
+            auto_hidden: true,
+            visible_by_choice: true,
+            ..HideDecision::default()
+        };
+        assert_eq!(settling.action(), HideAction::Nothing);
+
+        let settled = HideDecision {
+            stable_clear: true,
+            ..settling
+        };
+        assert_eq!(settled.action(), HideAction::Restore);
+    }
+
+    /// Turning the setting off has to release a widget that is already hidden,
+    /// or it stays gone with the switch that hid it now off.
+    #[test]
+    fn turning_the_setting_off_releases_a_hidden_widget() {
+        let released = HideDecision {
+            enabled: false,
+            fullscreen: true,
+            auto_hidden: true,
+            visible_by_choice: true,
+            ..HideDecision::default()
+        };
+        assert_eq!(released.action(), HideAction::Restore);
+
+        let nothing_to_release = HideDecision {
+            enabled: false,
+            fullscreen: true,
+            ..HideDecision::default()
+        };
+        assert_eq!(nothing_to_release.action(), HideAction::Nothing);
+    }
+
+    /// A widget the user has hidden from the tray must not be restored by the
+    /// end of a game.
+    #[test]
+    fn a_deliberately_hidden_widget_stays_hidden() {
+        let hidden_by_choice = HideDecision {
+            stable_clear: true,
+            auto_hidden: true,
+            visible_by_choice: false,
+            ..HideDecision::default()
+        };
+        assert_eq!(hidden_by_choice.action(), HideAction::Nothing);
     }
 }
