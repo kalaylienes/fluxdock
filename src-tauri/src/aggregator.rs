@@ -224,7 +224,8 @@ fn check_thresholds(app: &AppHandle, state: &Arc<AppState>, payload: &UsagePaylo
     }
 }
 
-/// Machine readable status at `%APPDATA%\FluxDock\state.json`.
+/// Machine readable status at `state.json` in the data directory,
+/// `%APPDATA%\FluxDock` on Windows and `~/.config/FluxDock` on Linux.
 /// `generated_at` changes every cycle, so the comparison ignores it.
 fn write_state_file(payload: &UsagePayload) {
     static LAST: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);

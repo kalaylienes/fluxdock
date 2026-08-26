@@ -1,4 +1,5 @@
-//! Persistent settings, stored at `%APPDATA%\FluxDock\settings.json`.
+//! Persistent settings, stored at `%APPDATA%\FluxDock\settings.json` on
+//! Windows and `~/.config/FluxDock/settings.json` on Linux.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -1,8 +1,8 @@
 # FluxDock
 
-A small Windows widget that shows how much of your Claude Code, Codex CLI and
+A small desktop widget that shows how much of your Claude Code, Codex CLI and
 Google Antigravity limits you have left, one bar per limit window your account
-actually has.
+actually has. Windows and Linux.
 
 It runs as a floating widget above the taskbar, or pinned into the taskbar strip
 next to the clock.
@@ -87,8 +87,53 @@ Or grab the installer or a portable zip by hand from the
 
 Requirements: Windows 10 or 11.
 
-Nothing to configure afterwards. If Claude Code or Codex CLI is signed in, the
-bars fill within a few seconds of the first launch.
+### On Linux
+
+Download the AppImage from the
+[releases page](https://github.com/kalaylienes/fluxdock/releases), make it
+executable and run it:
+
+```bash
+chmod +x FluxDock_*_amd64.AppImage
+./FluxDock_*_amd64.AppImage
+```
+
+There is a `.deb` as well, for Debian and Ubuntu:
+
+```bash
+sudo apt install ./FluxDock_*_amd64.deb
+```
+
+What works, and what does not, is worth being exact about:
+
+| | X11 | Wayland |
+| --- | --- | --- |
+| Bars, countdowns, all three providers | yes | yes |
+| Tray icon and menu | yes, with an indicator extension on GNOME | same |
+| Placement on the monitor you chose | yes | no, the compositor decides |
+| Drag to a corner, remembered | yes | no |
+| Hiding for a fullscreen game | yes, including anything under XWayland | only under XWayland |
+| Follows the desktop light and dark setting | yes | yes |
+| Start at login | yes | yes |
+| Replacing itself when a new version appears | AppImage only | AppImage only |
+
+Wayland has no way for one application to place its own window or to ask what
+another one is doing, both by design. Nothing here works around that, so on a
+plain Wayland session the widget appears wherever the compositor puts it and
+stays there during a game. Most games run through XWayland, which is an X11
+client, so fullscreen hiding usually works even inside a Wayland session.
+
+Pinning into a panel is a Windows only feature and the menu does not offer it
+elsewhere: only the Windows taskbar is understood well enough to sit inside it
+without reserving desktop space.
+
+GNOME needs an AppIndicator extension for any tray icon at all, which is a GNOME
+decision rather than something this widget can fix. `libnotify` is what carries
+the diagnostic messages; without it they go to the log instead. A `.deb`
+install is owned by the package manager, so it never offers to replace itself.
+
+Nothing to configure afterwards. If Claude Code, Codex CLI or Antigravity is
+signed in, the bars fill within a few seconds of the first launch.
 
 The binary is not code signed yet, so Windows SmartScreen will warn on first
 run. Choose **More info**, then **Run anyway**, or build it yourself from
@@ -183,8 +228,8 @@ useful for reviewing the layout before your own usage builds up.
 
 ## Keeping it running
 
-FluxDock is meant to be something you stop thinking about, so there is an
-optional watchdog:
+FluxDock is meant to be something you stop thinking about, so on Windows there
+is an optional watchdog:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/install-watchdog.ps1
@@ -209,9 +254,32 @@ watchdog off again:
 powershell -ExecutionPolicy Bypass -File scripts/install-watchdog.ps1 -Remove
 ```
 
+On Linux the same job belongs to the session manager. A user unit is enough:
+
+```ini
+# ~/.config/systemd/user/fluxdock.service
+[Unit]
+Description=FluxDock usage widget
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/fluxdock
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+`Restart=on-failure` rather than `always` is the point: quitting from the tray
+menu exits cleanly and stays quit, while a kill brings the widget back. That is
+the same distinction the Windows watchdog makes, with no code behind it.
+
 If a crash ever does happen, the panic location is written to
-`%APPDATA%\FluxDock\last-crash.txt` along with the rolling logs next to it.
-That file is the useful thing to attach to an issue.
+`last-crash.txt` in the data directory, along with the rolling logs next to it.
+That file is the useful thing to attach to an issue. The directory is
+`%APPDATA%\FluxDock` on Windows and `~/.config/FluxDock` on Linux.
 
 ## Privacy
 
@@ -248,8 +316,16 @@ layout. Countdowns tick once a minute unless a reset is inside its final hour.
 
 ## Building
 
-Requirements: Rust stable with the MSVC toolchain, Node.js 20 or later, Visual
+On Windows: Rust stable with the MSVC toolchain, Node.js 20 or later, Visual
 Studio Build Tools with the C++ workload, and the WebView2 runtime.
+
+On Linux, the toolkit development packages as well:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
+npm run tauri build -- --bundles appimage,deb
+```
 
 ```powershell
 git clone https://github.com/kalaylienes/fluxdock.git
@@ -297,8 +373,12 @@ taskbar buttons.
 ## Scope
 
 FluxDock is a read only status widget for tools that enforce a real quota. It is
-not a cost dashboard, not a proxy between your CLI and the API, and not
-cross platform: the placement logic is written against the Windows shell.
+not a cost dashboard and not a proxy between your CLI and the API.
+
+It runs on Windows and on Linux. macOS is not supported: the placement, the
+panel and the fullscreen sensor would each need a third implementation, and
+writing one against a platform nobody here runs is how you ship something that
+looks finished and is not.
 
 Support is limited to Claude Code, Codex CLI and Antigravity because all three
 expose their limit windows through a first party readable source. Other tools

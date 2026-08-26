@@ -449,9 +449,19 @@ fn fullscreen_window_description() -> String {
     }
 }
 
+/// The last description the sensor produced. Windows reads the window again
+/// on demand from a handle it kept; here the handle belongs to a connection the
+/// caller does not have, so the line is kept instead.
+#[cfg(not(windows))]
+static LAST_FULLSCREEN_DESCRIPTION: parking_lot::Mutex<Option<String>> =
+    parking_lot::Mutex::new(None);
+
 #[cfg(not(windows))]
 fn fullscreen_window_description() -> String {
-    "a fullscreen window".into()
+    LAST_FULLSCREEN_DESCRIPTION
+        .lock()
+        .clone()
+        .unwrap_or_else(|| "an unidentified fullscreen window".into())
 }
 
 /// Reclaims the top of the topmost band when something has covered the widget.
@@ -741,9 +751,25 @@ fn fullscreen_state(app: &AppHandle) -> (bool, bool) {
     (true, same_display(ours.as_deref(), theirs.as_deref()))
 }
 
+/// The same two questions, asked over X11. A native Wayland session cannot
+/// answer either of them, and answers no rather than guessing: the widget then
+/// stays where it is, which is the behaviour every release before this one had
+/// on every platform but Windows.
 #[cfg(not(windows))]
-fn fullscreen_state(_app: &AppHandle) -> (bool, bool) {
-    (false, false)
+fn fullscreen_state(app: &AppHandle) -> (bool, bool) {
+    let Some((rect, description)) = crate::fullscreen_x11::covering() else {
+        return (false, false);
+    };
+    *LAST_FULLSCREEN_DESCRIPTION.lock() = Some(description);
+
+    let ours = widget_monitor(app).map(|m| m.stable_id);
+    let theirs = crate::monitor::monitor_at(
+        rect.left + (rect.right - rect.left) / 2,
+        rect.top + (rect.bottom - rect.top) / 2,
+    )
+    .map(|m| m.stable_id);
+
+    (true, same_display(ours.as_deref(), theirs.as_deref()))
 }
 
 /// Are those two the same monitor? An unknown answer counts as yes, which is
@@ -760,7 +786,6 @@ fn same_display(ours: Option<&str>, theirs: Option<&str>) -> bool {
 /// The monitor the widget is on, read from where the window actually sits
 /// rather than from the setting, because in floating placement the user can
 /// drag it to another screen and the answer has to follow.
-#[cfg(windows)]
 fn widget_monitor(app: &AppHandle) -> Option<crate::monitor::MonitorInfo> {
     let win = widget(app)?;
     let pos = win.outer_position().ok()?;

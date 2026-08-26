@@ -11,9 +11,39 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build and draft
+  # First, and on its own, because a mistyped tag used to be found only after a
+  # full Windows build had already run.
+  check:
+    name: Check the tag
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for file in src-tauri/tauri.conf.json package.json; do
+            found=$(node -p "require('./$file').version")
+            if [ "$tag" != "$found" ]; then
+              echo "tag $tag does not match $file $found" >&2
+              exit 1
+            fi
+          done
+          found=$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)
+          if [ "$tag" != "$found" ]; then
+            echo "tag $tag does not match src-tauri/Cargo.toml $found" >&2
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows
+    needs: check
     runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@v5
 
@@ -38,16 +68,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      - name: Check the tag against the manifest
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}" -replace '^v', ''
-          $manifest = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          if ($tag -ne $manifest) {
-            throw "tag $tag does not match tauri.conf.json $manifest"
-          }
-          "VERSION=$tag" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
       - name: Package the portable build
         shell: pwsh
         run: |
@@ -56,42 +76,163 @@ jobs:
           $zip = "dist-portable/FluxDock-$env:VERSION-portable-x64.zip"
           Compress-Archive -Path dist-portable/fluxdock.exe -DestinationPath $zip -Force
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          "ZIP=$zip" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           # The Scoop manifest carries this hash, so it has to be easy to find.
           "Portable zip SHA256: ``$hash``" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-      - name: Write the updater manifest
+      - name: Collect what the release needs
         shell: pwsh
         run: |
           # Tauri 2 signs the installer itself and drops a .sig beside it. There
           # is no zip wrapper; the updater downloads the setup executable.
-          $nsis = "src-tauri/target/release/bundle/nsis"
-          $installer = "$nsis/FluxDock_${env:VERSION}_x64-setup.exe"
-          $sigFile = "$installer.sig"
-          if (-not (Test-Path $sigFile)) {
-            throw "no signature at $sigFile, so the build was not signed and no installed copy could accept it"
+          $installer = "src-tauri/target/release/bundle/nsis/FluxDock_${env:VERSION}_x64-setup.exe"
+          if (-not (Test-Path "$installer.sig")) {
+            throw "no signature at $installer.sig, so the build was not signed and no installed copy could accept it"
           }
-          $manifest = [ordered]@{
-            version   = $env:VERSION
-            pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            notes     = "See the release notes at https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
-            platforms = [ordered]@{
-              "windows-x86_64" = [ordered]@{
-                signature = (Get-Content $sigFile -Raw).Trim()
-                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/FluxDock_${env:VERSION}_x64-setup.exe"
-              }
-            }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $installer out/ -Force
+          Copy-Item "$installer.sig" out/ -Force
+          Copy-Item "dist-portable/FluxDock-$env:VERSION-portable-x64.zip" out/ -Force
+
+          # The fragment the draft job folds into latest.json. Written here
+          # because this is where the signature is.
+          $fragment = [ordered]@{
+            signature = (Get-Content "$installer.sig" -Raw).Trim()
+            url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/FluxDock_${env:VERSION}_x64-setup.exe"
           }
-          $manifest | ConvertTo-Json -Depth 5 | Out-File latest.json -Encoding utf8
-          "SIGFILE=$sigFile" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $fragment | ConvertTo-Json -Depth 5 | Out-File out/windows-x86_64.json -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux
+    needs: check
+    # Older than the newest on purpose: a binary built against a newer glibc
+    # will not start on a distribution that ships an older one.
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf
+
+      - run: npm ci
+
+      # The manifest names the Windows target only, so the bundles are chosen
+      # here instead. That keeps the Windows release byte for byte what it was.
+      - name: Build the bundles
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --bundles appimage,deb
+
+      - name: Collect what the release needs
+        run: |
+          set -euo pipefail
+          bundle=src-tauri/target/release/bundle
+          mkdir -p out
+
+          appimage=$(find "$bundle/appimage" -name '*.AppImage' -print -quit)
+          archive=$(find "$bundle/appimage" -name '*.AppImage.tar.gz' -print -quit)
+          deb=$(find "$bundle/deb" -name '*.deb' -print -quit)
+          for f in "$appimage" "$archive" "$deb" "$archive.sig"; do
+            if [ ! -f "$f" ]; then
+              echo "missing $f" >&2
+              exit 1
+            fi
+          done
+
+          cp "$appimage" "$archive" "$archive.sig" "$deb" out/
+
+          # An installed AppImage replaces itself from the tarball, not from the
+          # AppImage file, which is why the signature belongs to the archive.
+          node -e '
+            const fs = require("fs");
+            const name = process.argv[1];
+            fs.writeFileSync("out/linux-x86_64.json", JSON.stringify({
+              signature: fs.readFileSync(process.argv[2], "utf8").trim(),
+              url: `https://github.com/${process.env.REPO}/releases/download/${process.env.TAG}/${name}`,
+            }, null, 2));
+          ' "$(basename "$archive")" "$archive.sig"
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/*
+          if-no-files-found: error
+
+  draft:
+    name: Draft the release
+    needs: [check, windows, linux]
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Write the updater manifest
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const platforms = {
+              "windows-x86_64": JSON.parse(fs.readFileSync("artifacts/windows/windows-x86_64.json", "utf8")),
+              "linux-x86_64": JSON.parse(fs.readFileSync("artifacts/linux/linux-x86_64.json", "utf8")),
+            };
+            fs.writeFileSync("latest.json", JSON.stringify({
+              version: process.env.VERSION,
+              pub_date: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+              notes: `See the release notes at https://github.com/${process.env.REPO}/releases/tag/${process.env.TAG}`,
+              platforms,
+            }, null, 2));
+          '
+          cat latest.json
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
 
       - name: Draft the release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $setup = "src-tauri/target/release/bundle/nsis/FluxDock_${env:VERSION}_x64-setup.exe"
-          # latest.json and the signed archive have to travel with the release:
-          # installed copies read them from the newest published tag, so a draft
-          # that is missing them silently strands everyone on their old version.
-          gh release create "${{ github.ref_name }}" --draft --title "FluxDock $env:VERSION" --notes "Draft. Write the notes, check the Scoop hash in the run summary, then publish." $setup $env:ZIP $env:SIGFILE latest.json
+          set -euo pipefail
+          # latest.json and the signed artefacts have to travel with the
+          # release: installed copies read them from the newest published tag,
+          # so a draft that is missing them silently strands everyone on their
+          # old version.
+          files=$(find artifacts -type f ! -name '*-x86_64.json' | sort)
+          echo "$files"
+          gh release create "${{ github.ref_name }}" \
+            --draft \
+            --title "FluxDock $VERSION" \
+            --notes "Draft. Write the notes, check the Scoop hash in the Windows job summary, then publish." \
+            $files latest.json

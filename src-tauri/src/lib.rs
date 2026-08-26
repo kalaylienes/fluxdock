@@ -1,8 +1,10 @@
-//! FluxDock, a usage widget for Claude Code and Codex CLI on Windows.
+//! FluxDock, a usage widget for Claude Code, Codex CLI and Antigravity.
 
 pub mod aggregator;
 pub mod autostart;
 pub mod diagnostics;
+#[cfg(not(windows))]
+pub mod fullscreen_x11;
 pub mod jsonl;
 pub mod model;
 pub mod monitor;

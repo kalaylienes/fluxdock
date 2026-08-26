@@ -57,8 +57,17 @@
     "copyright": "Copyright (C) 2026 FluxDock contributors",
     "license": "GPL-3.0-or-later",
     "homepage": "https://github.com/kalaylienes/fluxdock",
-    "shortDescription": "Claude Code and Codex CLI usage widget",
-    "longDescription": "Shows Claude Code and Codex CLI usage for every limit window your account has, floating above the taskbar or pinned into it.",
+    "shortDescription": "Claude Code, Codex CLI and Antigravity usage widget",
+    "longDescription": "Shows Claude Code, Codex CLI and Antigravity usage for every limit window your account has, floating above the taskbar or pinned into it.",
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1"
+        ]
+      }
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",
