@@ -1,6 +1,6 @@
 {
     "version": "1.1.0",
-    "description": "Windows widget for Claude Code, Codex CLI and Antigravity usage, floating above the taskbar or pinned into it",
+    "description": "Desktop widget for Claude Code, Codex CLI and Antigravity usage, floating above the taskbar or pinned into it",
     "homepage": "https://github.com/kalaylienes/fluxdock",
     "license": "GPL-3.0-or-later",
     "url": "https://github.com/kalaylienes/fluxdock/releases/download/v1.1.0/FluxDock-1.1.0-portable-x64.zip",

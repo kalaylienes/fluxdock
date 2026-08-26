@@ -7,15 +7,20 @@ actually has. Windows and Linux.
 It runs as a floating widget above the taskbar, or pinned into the taskbar strip
 next to the clock.
 
-![FluxDock floating above the taskbar](docs/media/floating-dark.png)
+![FluxDock floating above the taskbar, with Claude Code, Codex CLI and Antigravity rows](docs/media/floating-dark.png)
 
-<sub>Floating placement. Each tool gets a row per limit window, with the
-percentage and the time left before it resets.</sub>
+<sub>Floating placement. One row per limit window, with the percentage and the
+time left before it resets. Antigravity shares a weekly limit per model family
+rather than per tool, so its rows are named after the family: `Gem` for the
+Gemini models, `3P` for the Claude and GPT ones. The widget is translucent over
+whatever is behind it; these shots are flattened so the corners stay clean on
+both GitHub themes.</sub>
 
-![FluxDock pinned into the taskbar](docs/media/taskbar.png)
+![FluxDock pinned into the taskbar strip, one column per tool](docs/media/taskbar.png)
 
-<sub>Pinned placement. The same four numbers, laid out as one column per tool so
-the whole thing fits inside the taskbar strip.</sub>
+<sub>Pinned placement. The same numbers as one column per tool, sized to sit
+inside the taskbar strip. The strip widens as tools are added rather than
+reserving a fixed block of it.</sub>
 
 ## Why
 
@@ -47,7 +52,8 @@ reset, so the question is answered before you ask it.
 - **Gets out of the way.** Hides automatically while a fullscreen application is
   in front, including borderless windowed games. On more than one monitor it
   only hides for a game on its own screen: a widget on the side display stays
-  where it is while the middle one is filled.
+  where it is while the middle one is filled. A window opened across both
+  displays covers both, and the widget gets out of the way wherever it sits.
 - **Burn rate and time to exhaustion** in the tooltip, alongside the token
   breakdown for the current block.
 - **Threshold notifications** at 70% and 90%, once per window.
@@ -55,12 +61,14 @@ reset, so the question is answered before you ask it.
 - **Machine readable status** at `%APPDATA%\FluxDock\state.json` for status bars
   and scripts.
 
-![Warning and stale states](docs/media/states.png)
+![A red row, a warning row, an estimated row and a stale pair in one widget](docs/media/states.png)
 
-<sub>Above: the first window is past 90% and turns red, the second is in the
-warning band. The grey row is a stale snapshot. Codex only updates its counters
-while it is running, so once a snapshot is older than the window it describes the
-bar greys out and the countdown clears rather than showing a number that has
+<sub>What a row says besides the number. The first window is past 90% and turns
+red, the second is in the warning band and carries `est.` because it was
+interpolated between polls rather than read from the server. The grey pair
+belongs to a tool that is not running: Codex CLI and Antigravity only report
+while they are open, so once a snapshot is older than the window it describes
+the bar greys out and the countdown clears rather than showing a number that has
 quietly stopped being true.</sub>
 
 ## Install
@@ -201,8 +209,6 @@ into the CLI's own log, which is the only file read. Because the server is the
 CLI, the numbers stop arriving when you close it: the last reading is kept and
 greys out after six hours, since the same account can still be spent from the
 IDE or from another machine.
-
-![Estimated values are labelled](docs/media/estimates.png)
 
 Reading local files never consumes quota. The only exception is refreshing an
 expired Claude token, which delegates to the CLI, costs a negligible amount, and
@@ -409,6 +415,7 @@ commercially, must keep the source available under the same terms. A closed,
 proprietary resale is not permitted.
 
 FluxDock is an independent project and is not affiliated with, endorsed by, or
-sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of
-Anthropic. Codex is a trademark of OpenAI. The provider glyphs in the widget are
-drawn for this project rather than taken from either vendor.
+sponsored by Anthropic, OpenAI or Google. Claude and Claude Code are trademarks
+of Anthropic. Codex is a trademark of OpenAI. Antigravity and Gemini are
+trademarks of Google. The provider glyphs in the widget are drawn for this
+project rather than taken from any vendor.
