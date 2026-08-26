@@ -232,7 +232,10 @@ jobs:
           # old version.
           files=$(find artifacts -type f ! -name '*-x86_64.json' | sort)
           echo "$files"
+          # --repo because this job has no checkout to infer it from: it
+          # only ever handles artefacts the other two built.
           gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
             --draft \
             --title "FluxDock $VERSION" \
             --notes "Draft. Write the notes, check the Scoop hash in the Windows job summary, then publish." \
