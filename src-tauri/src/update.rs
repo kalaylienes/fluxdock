@@ -37,6 +37,19 @@ pub fn installing() -> bool {
     INSTALLING.load(Ordering::Relaxed)
 }
 
+/// Whether this build can replace itself.
+///
+/// Windows always can. On Linux only an AppImage can: a `.deb` is owned by the
+/// package manager, and replacing it means `dpkg -i` as root, which a widget in
+/// the tray has no business asking for. Where the answer is no, the menu says
+/// nothing about updates at all rather than offering something that fails.
+pub fn self_updatable() -> bool {
+    if cfg!(windows) {
+        return true;
+    }
+    std::env::var_os("APPIMAGE").is_some()
+}
+
 /// Starts the background check loop. Honours the setting on every pass rather
 /// than only at startup, so turning it off takes effect without a restart.
 pub fn watch(app: &AppHandle) {

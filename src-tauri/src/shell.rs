@@ -27,9 +27,21 @@ pub fn open(path: &Path) {
     }
 }
 
+/// The desktop's own handler. `xdg-open` is the portable one; `gio open`
+/// covers a GNOME session that has no xdg-utils installed.
 #[cfg(not(windows))]
 pub fn open(path: &Path) {
-    let _ = path;
+    let target = path.as_os_str();
+    for (program, args) in [("xdg-open", vec![]), ("gio", vec!["open"])] {
+        let started = std::process::Command::new(program)
+            .args(&args)
+            .arg(target)
+            .spawn();
+        if started.is_ok() {
+            return;
+        }
+    }
+    tracing::warn!("nothing on this system knows how to open {path:?}");
 }
 
 /// Waits for a process to disappear, then starts this executable again.
@@ -61,7 +73,20 @@ pub fn relaunch_after(pid: u32, timeout: std::time::Duration) {
     }
 }
 
+/// The same wait, without a handle to wait on. `/proc/<pid>` disappears when
+/// the process is reaped, which is the signal that the single instance lock has
+/// been released.
 #[cfg(not(windows))]
 pub fn relaunch_after(pid: u32, timeout: std::time::Duration) {
-    let _ = (pid, timeout);
+    let deadline = std::time::Instant::now() + timeout;
+    let entry = std::path::PathBuf::from(format!("/proc/{pid}"));
+    while entry.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe).spawn();
+    }
 }

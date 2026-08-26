@@ -578,13 +578,27 @@ fn resolve_codex_binary() -> Option<String> {
         return Some(found);
     }
     let home = dirs::home_dir()?;
-    [
+
+    #[cfg(windows)]
+    let candidates = [
         home.join("AppData/Roaming/npm/codex.cmd"),
         home.join(".codex/bin/codex.exe"),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
-    .map(|p| p.to_string_lossy().to_string())
+    ];
+
+    #[cfg(not(windows))]
+    let candidates = [
+        home.join(".local/bin/codex"),
+        home.join(".codex/bin/codex"),
+        home.join(".npm-global/bin/codex"),
+        home.join(".bun/bin/codex"),
+        std::path::PathBuf::from("/usr/local/bin/codex"),
+        std::path::PathBuf::from("/usr/bin/codex"),
+    ];
+
+    candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 #[cfg(test)]

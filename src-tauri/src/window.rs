@@ -73,18 +73,11 @@ pub fn set_content_height(app: &AppHandle, logical_h: f64) {
 
 /// What the floating window should be, in logical pixels.
 fn floating_height() -> f64 {
-    #[cfg(windows)]
-    {
-        let stored = MEASURED_HEIGHT.load(Ordering::SeqCst);
-        if stored == 0 {
-            crate::monitor::DEFAULT_LOGICAL_H
-        } else {
-            stored as f64 / 100.0
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        0.0
+    let stored = MEASURED_HEIGHT.load(Ordering::SeqCst);
+    if stored == 0 {
+        crate::monitor::DEFAULT_LOGICAL_H
+    } else {
+        stored as f64 / 100.0
     }
 }
 
@@ -108,7 +101,6 @@ pub fn widget(app: &AppHandle) -> Option<tauri::WebviewWindow> {
 }
 
 pub fn reposition(app: &AppHandle) {
-    #[cfg(windows)]
     {
         use crate::monitor;
 
@@ -120,7 +112,19 @@ pub fn reposition(app: &AppHandle) {
             return;
         };
 
-        let taskbar_target = if s.widget.taskbar_mode() {
+        // A desktop with no panel this widget understands cannot host pinned
+        // placement at all. Correcting the stored preference rather than
+        // returning early matters: the pinned branch below leaves the window
+        // unplaced, so a setting carried over from Windows would otherwise
+        // leave the widget wherever the compositor first dropped it.
+        let pinned = s.widget.taskbar_mode();
+        if pinned && !monitor::supports_panel_docking() {
+            tracing::info!("no panel to pin into on this desktop, using floating placement");
+            state.settings.update(|s| s.widget.mode = "float".into());
+        }
+        let pinned = pinned && monitor::supports_panel_docking();
+
+        let taskbar_target = if pinned {
             match monitor::taskbar_for(&mon) {
                 Some(bar) => {
                     if !bar.on_screen {
@@ -176,7 +180,7 @@ pub fn reposition(app: &AppHandle) {
             }
         };
 
-        if s.widget.taskbar_mode()
+        if pinned
             && s.widget.visible
             && !AUTO_HIDDEN.load(Ordering::SeqCst)
             && !win.is_visible().unwrap_or(true)
@@ -202,10 +206,6 @@ pub fn reposition(app: &AppHandle) {
             });
         }
     }
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-    }
 }
 
 /// Resolves the monitor again after a drag and stores the new corner offset.
@@ -227,7 +227,6 @@ pub fn on_moved(app: &AppHandle) {
     });
 }
 
-#[cfg(windows)]
 fn finalize_move(app: &AppHandle) {
     use crate::monitor;
 
@@ -285,9 +284,6 @@ fn finalize_move(app: &AppHandle) {
     });
     crate::tray::rebuild(app);
 }
-
-#[cfg(not(windows))]
-fn finalize_move(_app: &AppHandle) {}
 
 /// Shows the widget because the user asked for it, from the tray or by starting
 /// the app a second time. Whatever is in front, the answer to that is to show
@@ -521,7 +517,6 @@ fn ensure_on_top(_app: &AppHandle) {}
 /// on a later layout change to bring it back. If that change never arrives the
 /// widget stays hidden with nothing to recover it, so visibility is reconciled
 /// on every tick instead of only on transitions.
-#[cfg(windows)]
 fn reconcile_taskbar_visibility(app: &AppHandle) {
     let state = app.state::<Arc<AppState>>();
     let s = state.settings.get();
@@ -543,9 +538,6 @@ fn reconcile_taskbar_visibility(app: &AppHandle) {
         let _ = win.show();
     }
 }
-
-#[cfg(not(windows))]
-fn reconcile_taskbar_visibility(_app: &AppHandle) {}
 
 pub fn set_click_through(app: &AppHandle, enabled: bool) {
     if let Some(win) = widget(app) {
@@ -577,7 +569,6 @@ pub fn spawn_reconciler(app: AppHandle) {
             let (anywhere, fullscreen) = fullscreen_state(&app);
             FULLSCREEN_NOW.store(anywhere, Ordering::Relaxed);
 
-            #[cfg(windows)]
             if !fullscreen {
                 let taskbar_mode = app
                     .state::<Arc<AppState>>()
@@ -591,6 +582,11 @@ pub fn spawn_reconciler(app: AppHandle) {
                 // then anyway, and leaving the signature untouched means the
                 // first tick afterwards still notices anything that moved.
                 if taskbar_mode || tick % TOPOLOGY_EVERY == 0 {
+                    // Asks the platform for a fresh copy of the layout. On
+                    // Windows this is nothing; on Linux the answer lands on the
+                    // next tick, because it can only be read from the thread
+                    // that owns the main loop.
+                    crate::monitor::refresh();
                     let signature = topology_signature(&app);
                     if signature != last_signature {
                         last_signature = signature;
@@ -639,7 +635,6 @@ pub fn spawn_reconciler(app: AppHandle) {
     });
 }
 
-#[cfg(windows)]
 fn topology_signature(app: &AppHandle) -> String {
     let mut signature = crate::monitor::enumerate()
         .iter()

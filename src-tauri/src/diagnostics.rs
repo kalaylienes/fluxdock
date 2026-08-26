@@ -64,15 +64,12 @@ pub fn save_report(app: &AppHandle) {
     );
     out.push('\n');
 
-    #[cfg(windows)]
-    {
-        out.push_str("\nmonitors\n");
-        for m in crate::monitor::enumerate() {
-            out.push_str(&format!(
-                "  {} | {} | dpi {} | primary {} | id {}\n",
-                m.gdi_name, m.friendly_name, m.dpi, m.primary, m.stable_id
-            ));
-        }
+    out.push_str("\nmonitors\n");
+    for m in crate::monitor::enumerate() {
+        out.push_str(&format!(
+            "  {} | {} | dpi {} | primary {} | id {}\n",
+            m.gdi_name, m.friendly_name, m.dpi, m.primary, m.stable_id
+        ));
     }
 
     let path = data_dir().join(format!("diagnostic-{}.txt", Utc::now().format("%Y%m%d-%H%M%S")));
@@ -100,7 +97,18 @@ pub fn message_box(title: &str, text: &str) {
     }
 }
 
+/// There is no one dialog on Linux, and pulling in a toolkit to draw one for
+/// two rare confirmations is more machinery than the job deserves.
+/// `notify-send` is what a desktop with libnotify already has; without it the
+/// message goes to the log, which is where the report itself lives anyway.
 #[cfg(not(windows))]
-pub fn message_box(_title: &str, text: &str) {
-    tracing::info!("{text}");
+pub fn message_box(title: &str, text: &str) {
+    let sent = std::process::Command::new("notify-send")
+        .arg(title)
+        .arg(text)
+        .spawn()
+        .is_ok();
+    if !sent {
+        tracing::info!("{text}");
+    }
 }

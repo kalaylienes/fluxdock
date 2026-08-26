@@ -80,24 +80,18 @@ pub fn cli_command(path: &str) -> std::process::Command {
 
 /// How long a lookup result is trusted. A CLI does not move around often, and a
 /// missing one especially does not appear on its own.
-#[cfg(windows)]
 const PATH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// A lookup result and when it was taken. `None` is a remembered miss.
-#[cfg(windows)]
 type PathLookup = (Option<String>, std::time::Instant);
 
-/// Remembered lookups, misses included. `where` is itself a process, so calling
-/// it on every poll spawns one for a CLI that is not installed at all.
-#[cfg(windows)]
+/// Remembered lookups, misses included. On Windows `where` is itself a process,
+/// so calling it on every poll spawns one for a CLI that is not installed at
+/// all; elsewhere the walk is cheap but the answer is just as stable.
 static PATH_CACHE: parking_lot::Mutex<Option<std::collections::HashMap<String, PathLookup>>> =
     parking_lot::Mutex::new(None);
 
-/// Picks an entry point Windows can actually launch.
-///
-/// `where` lists the extensionless shell script first, which fails with
-/// "not a valid Win32 application", so executable extensions win.
-#[cfg(windows)]
+/// Picks an entry point the platform can actually launch.
 pub fn resolve_on_path(name: &str) -> Option<String> {
     {
         let mut guard = PATH_CACHE.lock();
@@ -117,6 +111,8 @@ pub fn resolve_on_path(name: &str) -> Option<String> {
     found
 }
 
+/// `where` lists the extensionless shell script first, which fails with
+/// "not a valid Win32 application", so executable extensions win.
 #[cfg(windows)]
 fn lookup_on_path(name: &str) -> Option<String> {
     let out = quiet_command("where").arg(name).output().ok()?;
@@ -136,7 +132,40 @@ fn lookup_on_path(name: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-#[cfg(not(windows))]
-pub fn resolve_on_path(_name: &str) -> Option<String> {
-    None
+/// Walks `PATH` in process rather than shelling out. `which` is not on every
+/// system and spawning one to find out whether a CLI exists is a process per
+/// poll for a CLI that does not.
+#[cfg(unix)]
+fn lookup_on_path(name: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            candidate
+                .metadata()
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        })
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two lookups of a name that is not installed must not walk the filesystem
+    /// twice. The miss is the case that repeats, because a missing CLI stays
+    /// missing for the whole session.
+    #[test]
+    fn a_miss_is_remembered_too() {
+        let name = "fluxdock-a-binary-that-does-not-exist";
+        assert_eq!(resolve_on_path(name), None);
+
+        let cached = PATH_CACHE.lock();
+        let map = cached.as_ref().expect("the cache was created");
+        assert!(map.contains_key(name), "the miss was not recorded");
+        assert!(map[name].0.is_none());
+    }
 }

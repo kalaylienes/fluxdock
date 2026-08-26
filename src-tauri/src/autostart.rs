@@ -1,8 +1,8 @@
-//! Start with Windows, through the per user Run key. No elevation needed.
+//! Start with the session. The per user Run key on Windows, an XDG autostart
+//! entry on Linux. Neither needs elevation, and the plugin picks the right one.
 
 use tauri::AppHandle;
 
-#[cfg(windows)]
 pub fn apply(app: &AppHandle, enabled: bool) {
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
@@ -21,9 +21,6 @@ pub fn apply(app: &AppHandle, enabled: bool) {
         tracing::error!("autostart could not be updated: {e}");
     }
 }
-
-#[cfg(not(windows))]
-pub fn apply(_app: &AppHandle, _enabled: bool) {}
 
 pub fn sync(app: &AppHandle, enabled: bool) {
     apply(app, enabled);

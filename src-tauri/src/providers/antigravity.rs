@@ -549,7 +549,10 @@ mod tests {
         println!("candidate ports: {ports:?}");
         assert!(!ports.is_empty(), "no port found in the CLI logs");
 
-        let reading = provider.fetch().await.expect("the language server answered");
+        let reading = provider
+            .fetch()
+            .await
+            .expect("the language server answered");
         println!("port {:?}", provider.port);
         for bucket in &reading.buckets {
             println!(
@@ -558,7 +561,10 @@ mod tests {
             );
         }
         assert!(!reading.buckets.is_empty());
-        assert!(reading.buckets.iter().all(|b| (0.0..=100.0).contains(&b.used)));
+        assert!(reading
+            .buckets
+            .iter()
+            .all(|b| (0.0..=100.0).contains(&b.used)));
     }
 
     #[test]

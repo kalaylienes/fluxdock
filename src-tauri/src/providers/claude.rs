@@ -689,15 +689,31 @@ fn resolve_claude_binary() -> Option<String> {
     }
 
     let home = dirs::home_dir()?;
-    [
+
+    #[cfg(windows)]
+    let candidates = [
         home.join("AppData/Roaming/npm/claude.cmd"),
         home.join("AppData/Local/Programs/claude/claude.exe"),
         home.join(".local/bin/claude.exe"),
         home.join(".claude/local/claude.exe"),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
-    .map(|p| p.to_string_lossy().to_string())
+    ];
+
+    // The installer's own directory first, then the places the usual package
+    // managers put a global binary, then the system ones.
+    #[cfg(not(windows))]
+    let candidates = [
+        home.join(".local/bin/claude"),
+        home.join(".claude/local/claude"),
+        home.join(".npm-global/bin/claude"),
+        home.join(".bun/bin/claude"),
+        std::path::PathBuf::from("/usr/local/bin/claude"),
+        std::path::PathBuf::from("/usr/bin/claude"),
+    ];
+
+    candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 #[cfg(test)]

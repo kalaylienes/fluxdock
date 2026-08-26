@@ -13,6 +13,12 @@ use crate::model::{ProviderStatus, UsagePayload};
 use crate::state::{AppState, Refresh};
 use crate::{diagnostics, monitor, window};
 
+/// What the session calls the thing this switch turns on.
+#[cfg(windows)]
+const AUTOSTART_LABEL: &str = "Start with Windows";
+#[cfg(not(windows))]
+const AUTOSTART_LABEL: &str = "Start at login";
+
 pub const TRAY_ID: &str = "main";
 
 /// The live menu, plus a signature of what it currently shows.
@@ -174,7 +180,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
     // A waiting update goes above everything else. Anywhere further down and it
     // is a line in a long menu nobody reads.
-    let update_ready = match (crate::update::available(), crate::update::installing()) {
+    let update_ready = match (
+        crate::update::available().filter(|_| crate::update::self_updatable()),
+        crate::update::installing(),
+    ) {
         (_, true) => Some(
             MenuItemBuilder::with_id("update:install", "Updating, please wait")
                 .enabled(false)
@@ -211,21 +220,25 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     }
     let freq = freq.build()?;
 
-    let placement = SubmenuBuilder::new(app, "Placement")
-        .item(
-            &CheckMenuItemBuilder::with_id("place:float", "Floating widget")
-                .checked(!s.widget.taskbar_mode())
-                .build(app)?,
-        )
-        .item(
+    // Pinning is only offered where there is a panel this widget understands.
+    // Showing the choice and then quietly ignoring it is worse than not
+    // offering it, and the Placement submenu with one entry still says which
+    // placement is in use.
+    let mut placement = SubmenuBuilder::new(app, "Placement").item(
+        &CheckMenuItemBuilder::with_id("place:float", "Floating widget")
+            .checked(!s.widget.taskbar_mode())
+            .build(app)?,
+    );
+    if monitor::supports_panel_docking() {
+        placement = placement.item(
             &CheckMenuItemBuilder::with_id("place:taskbar", "Pinned to taskbar")
                 .checked(s.widget.taskbar_mode())
                 .build(app)?,
-        )
-        .build()?;
+        );
+    }
+    let placement = placement.build()?;
 
     let mut mon = SubmenuBuilder::new(app, "Monitor");
-    #[cfg(windows)]
     {
         let monitors = monitor::enumerate();
         let selected = s.widget.monitor_stable_id.clone();
@@ -339,7 +352,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         )
         .build()?;
 
-    let autostart = CheckMenuItemBuilder::with_id("autostart", "Start with Windows")
+    let autostart = CheckMenuItemBuilder::with_id("autostart", AUTOSTART_LABEL)
         .checked(s.autostart)
         .build(app)?;
 

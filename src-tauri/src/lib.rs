@@ -5,7 +5,6 @@ pub mod autostart;
 pub mod diagnostics;
 pub mod jsonl;
 pub mod model;
-#[cfg(windows)]
 pub mod monitor;
 pub mod net;
 pub mod providers;
@@ -153,7 +152,6 @@ pub fn run() {
 
     // Single instance has to register first so a second launch reaches the
     // running process and brings the widget back.
-    #[cfg(windows)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A watchdog check is not a request to see the widget. Unhiding it
@@ -188,6 +186,11 @@ pub fn run() {
             let store = Arc::new(SettingsStore::load());
             let (state, rx) = AppState::new(store.clone());
             app.manage(state.clone());
+
+            // Before the tray menu, which lists the displays, and before any
+            // placement. On Linux the layout can only be read from this thread,
+            // and both of those need it immediately.
+            monitor::init(&handle);
 
             tray::setup(&handle)?;
             autostart::sync(&handle, store.get().autostart);
