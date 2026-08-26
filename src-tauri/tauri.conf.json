@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "FluxDock",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "identifier": "com.fluxdock.widget",
   "build": {
     "beforeDevCommand": "npm run dev",

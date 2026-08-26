@@ -1,6 +1,6 @@
 [package]
 name = "fluxdock"
-version = "1.0.4"
+version = "1.1.0"
 description = "Desktop widget for Claude Code, Codex CLI and Antigravity usage windows"
 authors = ["FluxDock contributors"]
 license = "GPL-3.0-or-later"
