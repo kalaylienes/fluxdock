@@ -158,19 +158,20 @@ jobs:
           mkdir -p out
 
           appimage=$(find "$bundle/appimage" -name '*.AppImage' -print -quit)
-          archive=$(find "$bundle/appimage" -name '*.AppImage.tar.gz' -print -quit)
           deb=$(find "$bundle/deb" -name '*.deb' -print -quit)
-          for f in "$appimage" "$archive" "$deb" "$archive.sig"; do
-            if [ ! -f "$f" ]; then
-              echo "missing $f" >&2
+          # Tauri 2 signs each bundle where it stands and drops a .sig beside
+          # it. There is no tarball around the AppImage, the same way there is
+          # no zip around the Windows installer.
+          for f in "$appimage" "$appimage.sig" "$deb"; do
+            if [ -z "$f" ] || [ ! -f "$f" ]; then
+              echo "missing ${f:-an expected bundle}" >&2
+              ls -R "$bundle" >&2
               exit 1
             fi
           done
 
-          cp "$appimage" "$archive" "$archive.sig" "$deb" out/
+          cp "$appimage" "$appimage.sig" "$deb" out/
 
-          # An installed AppImage replaces itself from the tarball, not from the
-          # AppImage file, which is why the signature belongs to the archive.
           node -e '
             const fs = require("fs");
             const name = process.argv[1];
@@ -178,7 +179,7 @@ jobs:
               signature: fs.readFileSync(process.argv[2], "utf8").trim(),
               url: `https://github.com/${process.env.REPO}/releases/download/${process.env.TAG}/${name}`,
             }, null, 2));
-          ' "$(basename "$archive")" "$archive.sig"
+          ' "$(basename "$appimage")" "$appimage.sig"
         env:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
