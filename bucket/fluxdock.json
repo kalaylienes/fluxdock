@@ -1,10 +1,10 @@
 {
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Desktop widget for Claude Code, Codex CLI and Antigravity usage, floating above the taskbar or pinned into it",
     "homepage": "https://github.com/kalaylienes/fluxdock",
     "license": "GPL-3.0-or-later",
-    "url": "https://github.com/kalaylienes/fluxdock/releases/download/v1.1.0/FluxDock-1.1.0-portable-x64.zip",
-    "hash": "f8dc958212a7f4d9f1ff3d420f3d16de7bbbf7e64a80cd15a8c86089747929c2",
+    "url": "https://github.com/kalaylienes/fluxdock/releases/download/v1.1.1/FluxDock-1.1.1-portable-x64.zip",
+    "hash": "ed1930f767cf5e41aef31317bef3bd3e961921817f05dc4f439063e1b9c81a53",
     "bin": "fluxdock.exe",
     "shortcuts": [
         [
