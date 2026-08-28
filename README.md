@@ -131,9 +131,12 @@ plain Wayland session the widget appears wherever the compositor puts it and
 stays there during a game. Most games run through XWayland, which is an X11
 client, so fullscreen hiding usually works even inside a Wayland session.
 
-Pinning into a panel is a Windows only feature and the menu does not offer it
-elsewhere: only the Windows taskbar is understood well enough to sit inside it
-without reserving desktop space.
+Pinning into a panel is a Windows only feature. The Windows taskbar is an
+ordinary window with room inside it; GNOME's top bar is drawn by the desktop
+itself and there is no way for another program to put a window in it, so this
+is a missing place rather than a missing port. Placement lists the choice
+greyed out on Linux rather than hiding it, because a submenu with one entry
+reads as something that failed to load.
 
 GNOME needs an AppIndicator extension for any tray icon at all, which is a GNOME
 decision rather than something this widget can fix. `libnotify` is what carries

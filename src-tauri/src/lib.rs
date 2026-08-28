@@ -47,18 +47,27 @@ fn set_content_height(app: AppHandle, height: f64) {
 
 #[tauri::command]
 fn show_context_menu(app: AppHandle, window: tauri::WebviewWindow) {
-    let menu = app.state::<tray::MenuHandle>().0.read().clone();
-    if let Some(menu) = menu {
-        window::foreground_for_menu(&window);
-        // Displaying the menu borrows it for the whole modal loop, and that
-        // loop keeps pumping queued work. Any rebuild that lands in the middle
-        // would take a second borrow of the same object and abort the process,
-        // so rebuilds are held back until the guard drops.
-        let guard = tray::PopupGuard::new();
-        let _ = window.popup_menu(&menu);
-        drop(guard);
-        tray::flush_pending_rebuild(&app);
-    }
+    // Built here rather than borrowed from the tray. Showing a menu and
+    // swapping the tray's menu each take a mutable borrow of the object they
+    // are given, and on Linux the popup returns while the menu is still on
+    // screen, so sharing one object between them left a window in which a
+    // rebuild aborted the process. See tray::MenuHandle.
+    let Ok(menu) = tray::build_popup_menu(&app) else {
+        return;
+    };
+    window::foreground_for_menu(&window);
+    // The menu has to outlive this call for the same reason, so it is parked
+    // where it stays alive until the next popup replaces it.
+    app.state::<tray::MenuHandle>()
+        .popup
+        .write()
+        .replace(menu.clone());
+    // On Windows the popup runs a modal loop that keeps pumping queued work,
+    // and a rebuild landing in the middle of it is still worth deferring.
+    let guard = tray::PopupGuard::new();
+    let _ = window.popup_menu(&menu);
+    drop(guard);
+    tray::flush_pending_rebuild(&app);
 }
 
 /// Records where a panic happened before the process goes away.
@@ -99,13 +108,43 @@ fn install_panic_hook() {
         let _ = std::fs::write(
             path,
             format!(
-                "{}\npanic at {location}\n{message}\n",
-                chrono::Utc::now().to_rfc3339()
+                "{}\nFluxDock {} on {}\nup {}s\npanic at {location}\n{message}\n",
+                chrono::Utc::now().to_rfc3339(),
+                env!("CARGO_PKG_VERSION"),
+                desktop(),
+                uptime_secs(),
             ),
         );
 
         previous(info);
     }));
+}
+
+/// When this process started, for the crash report.
+static STARTED_AT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+fn uptime_secs() -> u64 {
+    STARTED_AT
+        .get()
+        .map(|t| t.elapsed().as_secs())
+        .unwrap_or_default()
+}
+
+/// Enough of the environment to tell two crash reports apart.
+///
+/// The same build behaves differently under X11 and Wayland, and under one
+/// desktop's window manager and another's. It is the first question asked of
+/// any report from Linux and the answer was not in the file.
+#[cfg(windows)]
+fn desktop() -> String {
+    "windows".into()
+}
+
+#[cfg(not(windows))]
+fn desktop() -> String {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "?".into());
+    let de = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "?".into());
+    format!("{} ({session}, {de})", std::env::consts::OS)
 }
 
 /// Marks a launch by the watchdog task rather than by a person.
@@ -147,6 +186,7 @@ pub fn run() {
         return;
     }
 
+    let _ = STARTED_AT.set(std::time::Instant::now());
     init_logging();
     install_panic_hook();
 
@@ -201,10 +241,10 @@ pub fn run() {
             window::apply_ex_styles(&handle);
             window::reposition(&handle);
 
+            // Click through is applied by `show`. On Linux the request
+            // aborts the process against a window that has never been
+            // realised, and at this point the widget has not been shown yet.
             let settings = store.get();
-            if settings.widget.click_through {
-                window::set_click_through(&handle, true);
-            }
             let force_show = std::env::args().any(|a| a == "--show");
             if settings.widget.visible || force_show {
                 window::show(&handle);
@@ -310,12 +350,19 @@ fn init_logging() {
 
     match appender {
         Ok(writer) => {
-            let (nb, guard) = tracing_appender::non_blocking(writer);
-            // The guard has to outlive the process for the writer to flush.
-            std::mem::forget(guard);
+            // Written straight through rather than through a background worker.
+            // The worker's buffer only flushes when its guard drops, the
+            // release profile aborts on panic so nothing drops, and the lines
+            // lost were always the ones written just before a crash: exactly
+            // the ones worth having. This app writes a handful of lines a
+            // minute, so there is nothing here for a buffer to earn.
             let _ = tracing_subscriber::registry()
                 .with(filter)
-                .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(nb))
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_ansi(false)
+                        .with_writer(writer),
+                )
                 .try_init();
         }
         Err(_) => {

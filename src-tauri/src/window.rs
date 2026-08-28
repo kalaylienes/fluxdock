@@ -111,6 +111,26 @@ pub fn widget(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     app.get_webview_window(WIDGET_LABEL)
 }
 
+/// Applies a size to a window the user is not allowed to resize.
+///
+/// GTK pins such a window to the size hints it was realised with and drops
+/// every later resize on the floor, so on Linux the widget stayed at the height
+/// the manifest declares however tall the interface said its rows were: two
+/// rows floated in the middle of a box built for four. Lifting the flag for the
+/// one call and putting it straight back is the only way through, and it never
+/// puts a grip on screen because the window has no decorations to grow one.
+#[cfg(windows)]
+fn resize(win: &tauri::WebviewWindow, w: u32, h: u32) {
+    let _ = win.set_size(PhysicalSize::new(w, h));
+}
+
+#[cfg(not(windows))]
+fn resize(win: &tauri::WebviewWindow, w: u32, h: u32) {
+    let _ = win.set_resizable(true);
+    let _ = win.set_size(PhysicalSize::new(w, h));
+    let _ = win.set_resizable(false);
+}
+
 pub fn reposition(app: &AppHandle) {
     {
         use crate::monitor;
@@ -147,7 +167,9 @@ pub fn reposition(app: &AppHandle) {
                     if target.is_none() {
                         // A vertical strip cannot host the layout at all, so
                         // this one is a real, lasting incompatibility.
-                        tracing::warn!("vertical taskbar cannot host the widget, using floating placement");
+                        tracing::warn!(
+                            "vertical taskbar cannot host the widget, using floating placement"
+                        );
                         state.settings.update(|s| s.widget.mode = "float".into());
                     }
                     target
@@ -179,7 +201,8 @@ pub fn reposition(app: &AppHandle) {
 
                 // If the clamp had to step in, the stored offset is invalid and
                 // would keep producing the same wrong target.
-                if (x, y) != (tx, ty) && (s.widget.edge_offset_x != 0 || s.widget.edge_offset_y != 0)
+                if (x, y) != (tx, ty)
+                    && (s.widget.edge_offset_x != 0 || s.widget.edge_offset_y != 0)
                 {
                     tracing::info!("stored offset pointed off screen, resetting it");
                     state.settings.update(|s| {
@@ -203,7 +226,7 @@ pub fn reposition(app: &AppHandle) {
         // Position first, then size, then position again: moving across a DPI
         // boundary otherwise leaves the window at the wrong size.
         let _ = win.set_position(PhysicalPosition::new(x, y));
-        let _ = win.set_size(PhysicalSize::new(w as u32, h as u32));
+        resize(&win, w as u32, h as u32);
         let _ = win.set_position(PhysicalPosition::new(x, y));
         let _ = win.set_always_on_top(true);
         apply_ex_styles(app);
@@ -244,7 +267,13 @@ fn finalize_move(app: &AppHandle) {
     let Some(win) = widget(app) else { return };
 
     // In taskbar mode the position is derived, so there is nothing to learn.
-    if app.state::<Arc<AppState>>().settings.get().widget.taskbar_mode() {
+    if app
+        .state::<Arc<AppState>>()
+        .settings
+        .get()
+        .widget
+        .taskbar_mode()
+    {
         return;
     }
 
@@ -254,7 +283,9 @@ fn finalize_move(app: &AppHandle) {
         return;
     }
 
-    let Ok(pos) = win.outer_position() else { return };
+    let Ok(pos) = win.outer_position() else {
+        return;
+    };
     let Ok(size) = win.outer_size() else { return };
 
     let center_x = pos.x + size.width as i32 / 2;
@@ -316,6 +347,11 @@ pub fn show(app: &AppHandle) {
     let _ = win.set_always_on_top(true);
     apply_ex_styles(app);
     let state = app.state::<Arc<AppState>>();
+    // Deferred from startup and from any period the widget spent hidden: the
+    // request is only safe against a window that has been realised.
+    if state.settings.get().widget.click_through {
+        let _ = win.set_ignore_cursor_events(true);
+    }
     state.settings.update(|s| s.widget.visible = true);
     crate::tray::rebuild(app);
     let _ = app.emit("config", state.appearance());
@@ -641,17 +677,30 @@ fn reconcile_taskbar_visibility(app: &AppHandle) {
     let Some((mon, _)) = crate::monitor::resolve(s.widget.monitor_stable_id.as_deref()) else {
         return;
     };
-    if crate::monitor::taskbar_for(&mon).map(|b| b.on_screen).unwrap_or(false) {
+    if crate::monitor::taskbar_for(&mon)
+        .map(|b| b.on_screen)
+        .unwrap_or(false)
+    {
         tracing::info!("taskbar strip is back, restoring the widget");
         reposition(app);
         let _ = win.show();
     }
 }
 
+/// Only ever asked of a window that is on screen.
+///
+/// Tao answers this on Linux by taking the widget's GdkWindow and unwrapping
+/// it. A window that has never been shown has none, so asking a hidden widget
+/// to ignore the cursor aborted the process on the next turn of the event loop,
+/// and because the setting is saved before it is applied, every launch after
+/// that aborted the same way: the app could not be started again at all. The
+/// choice is remembered and `show` puts it back.
 pub fn set_click_through(app: &AppHandle, enabled: bool) {
-    if let Some(win) = widget(app) {
-        let _ = win.set_ignore_cursor_events(enabled);
+    let Some(win) = widget(app) else { return };
+    if enabled && !win.is_visible().unwrap_or(false) {
+        return;
     }
+    let _ = win.set_ignore_cursor_events(enabled);
 }
 
 /// Keeps placement in step with the desktop.
@@ -729,7 +778,9 @@ pub fn spawn_reconciler(app: AppHandle) {
                 ensure_on_top(&app);
             }
 
-            let visible = widget(&app).and_then(|w| w.is_visible().ok()).unwrap_or(false);
+            let visible = widget(&app)
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
             // Animation stops for a game on any monitor. It is a courtesy to
             // the frames the game is drawing, and that is not a per display
             // matter.
@@ -764,7 +815,11 @@ fn topology_signature(app: &AppHandle) -> String {
             match crate::monitor::taskbar_for(&mon) {
                 Some(bar) => signature.push_str(&format!(
                     "|tb:{},{},{},{}:{}:{}",
-                    bar.rect.left, bar.rect.top, bar.rect.right, bar.rect.bottom, bar.tray_left,
+                    bar.rect.left,
+                    bar.rect.top,
+                    bar.rect.right,
+                    bar.rect.bottom,
+                    bar.tray_left,
                     bar.on_screen
                 )),
                 None => signature.push_str("|tb:none"),

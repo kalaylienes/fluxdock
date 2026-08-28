@@ -48,6 +48,10 @@ const LOG_MAX_AGE_DAYS: i64 = 2;
 /// IDE and with any other machine signed into the account.
 const MAX_FRESH_HOURS: i64 = 6;
 
+/// The last thing said about limits with no row, so it is said once rather than
+/// every three minutes for as long as the account has one.
+static SPARE_NOTE: parking_lot::Mutex<String> = parking_lot::Mutex::new(String::new());
+
 /// The last payload the language server handed over, for the diagnostic report.
 /// Which buckets an account has varies by tier, and this is the only way to see
 /// what a machine on the other side of a bug report actually received.
@@ -271,7 +275,14 @@ impl UsageProvider for AntigravityProvider {
         // Slot by order, label by content, the same rule Codex follows: the
         // field a window arrives in is an ordering, and the label is what the
         // row actually means.
-        for (i, bucket) in reading.buckets.iter().take(2).enumerate() {
+        //
+        // Two is what the strip carries, so a third limit has nowhere to be
+        // drawn. It is not therefore ignored: a limit with no row is exactly
+        // the one somebody would walk into with no warning at all, so every
+        // bucket still decides the status and the ones without a row are named
+        // in the tray tooltip.
+        let shown = reading.buckets.len().min(2);
+        for (i, bucket) in reading.buckets.iter().take(shown).enumerate() {
             let expired = bucket.resets.map(|r| r <= now).unwrap_or(false);
             let window = WindowSnapshot {
                 utilization: if expired { 0.0 } else { bucket.used },
@@ -290,10 +301,31 @@ impl UsageProvider for AntigravityProvider {
             }
         }
 
-        let any_full = [snap.five_hour.as_ref(), snap.weekly.as_ref()]
-            .into_iter()
-            .flatten()
-            .any(|w| w.utilization >= 100.0);
+        let any_full = reading
+            .buckets
+            .iter()
+            .filter(|b| !b.resets.map(|r| r <= now).unwrap_or(false))
+            .any(|b| b.used >= 100.0);
+
+        let spare: Vec<String> = reading
+            .buckets
+            .iter()
+            .skip(shown)
+            .map(|b| format!("{} {:.0}%", b.label, b.used))
+            .collect();
+        if !spare.is_empty() {
+            let note = format!(
+                "Antigravity reports {} limits and the widget draws {}: {}",
+                reading.buckets.len(),
+                shown,
+                spare.join(", ")
+            );
+            let mut last = SPARE_NOTE.lock();
+            if *last != note {
+                tracing::warn!("{note}");
+                *last = note;
+            }
+        }
 
         snap.status = if any_full {
             ProviderStatus::LimitReached
@@ -308,6 +340,8 @@ impl UsageProvider for AntigravityProvider {
                 "Antigravity not running, last reading {} min ago",
                 age.num_minutes().max(0)
             ))
+        } else if !spare.is_empty() {
+            Some(format!("also {}", spare.join(", ")))
         } else {
             reading.buckets.first().and_then(|b| b.group.clone())
         };
@@ -349,22 +383,31 @@ struct QuotaBucket {
     reset_time: Option<DateTime<Utc>>,
 }
 
+/// What a row is named from: its id, the group's name as a fallback, and the
+/// server's own word for how long the window is.
+type Naming<'a> = (&'a str, &'a str, Option<&'a str>);
+
 /// Flattens groups into rows in the order the server listed them.
 fn flatten(envelope: &QuotaEnvelope) -> Vec<Bucket> {
     let Some(summary) = envelope.response.as_ref() else {
         return Vec::new();
     };
+
+    let mut naming: Vec<Naming> = Vec::new();
     let mut out = Vec::new();
     for group in &summary.groups {
         for bucket in &group.buckets {
-            let id = bucket.bucket_id.as_deref().unwrap_or_default();
-            let fallback = group
-                .display_name
-                .as_deref()
-                .or(bucket.display_name.as_deref())
-                .unwrap_or("");
+            naming.push((
+                bucket.bucket_id.as_deref().unwrap_or_default(),
+                group
+                    .display_name
+                    .as_deref()
+                    .or(bucket.display_name.as_deref())
+                    .unwrap_or(""),
+                bucket.window.as_deref(),
+            ));
             out.push(Bucket {
-                label: bucket_label(id, fallback),
+                label: String::new(),
                 used: ((1.0 - bucket.remaining_fraction) * 100.0).clamp(0.0, 100.0),
                 resets: bucket.reset_time,
                 window: bucket.window.clone(),
@@ -372,33 +415,129 @@ fn flatten(envelope: &QuotaEnvelope) -> Vec<Bucket> {
             });
         }
     }
+
+    for (bucket, label) in out.iter_mut().zip(label_all(&naming)) {
+        bucket.label = label;
+    }
     out
 }
 
-/// A row label short enough for the strip.
-///
-/// The bucket id names the model family and the window, `gemini-weekly` and
-/// `3p-weekly`, so the part before the dash is the half that distinguishes one
-/// row from the other. Short ids are shown as they are, longer ones are cut to
-/// three characters, which is the widest label the layout carries.
-fn bucket_label(bucket_id: &str, fallback: &str) -> String {
-    let stem = bucket_id
-        .split('-')
-        .next()
-        .filter(|s| !s.is_empty())
-        .or_else(|| fallback.split_whitespace().next())
-        .unwrap_or("?");
+/// The widest label the strip carries.
+const LABEL_MAX: usize = 3;
 
-    if stem.chars().count() <= 3 {
-        return stem.to_uppercase();
+/// Names every row of one reading together.
+///
+/// A label has to tell one row apart from the ones beside it, and that is a
+/// property of the set rather than of any row on its own. Naming each bucket
+/// from its own id gave an account holding a five hour and a weekly Gemini
+/// limit two rows both reading `Gem`, which is the report this came from: no
+/// function of one bucket could have avoided it. So the whole reading is named
+/// at once and the first scheme that separates every row wins. Two families of
+/// one window each read `Gem` and `3P`; one family with two windows reads `5h`
+/// and `7d`; a mixture reads `G5h`, `G7d`, `P7d`.
+fn label_all(rows: &[Naming]) -> Vec<String> {
+    let schemes: [fn(&Naming) -> String; 3] = [family_label, window_label, family_window_label];
+
+    for scheme in schemes {
+        let labels: Vec<String> = rows.iter().map(scheme).collect();
+        let usable = labels
+            .iter()
+            .all(|l| !l.is_empty() && l.chars().count() <= LABEL_MAX);
+        if usable && all_different(&labels) {
+            return labels;
+        }
     }
 
-    let mut chars = stem.chars();
+    // Nothing in the answer separated them, so position does. A row that is
+    // merely unhelpful beats two that claim to be the same thing.
+    (1..=rows.len()).map(|i| format!("#{i}")).collect()
+}
+
+fn all_different(labels: &[String]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    labels.iter().all(|l| seen.insert(l.as_str()))
+}
+
+/// The model family, which is everything in the id before the window.
+fn family_label(row: &Naming) -> String {
+    let (id, fallback, _) = *row;
+    let family = id.rsplit_once('-').map(|(head, _)| head).unwrap_or(id);
+    if family.is_empty() {
+        shorten(fallback.split_whitespace().next().unwrap_or(""))
+    } else {
+        shorten(family)
+    }
+}
+
+/// How long the window is, taken from the server's own word for it where there
+/// is one and from the tail of the id otherwise.
+fn window_label(row: &Naming) -> String {
+    let (id, _, window) = *row;
+    let word = window
+        .filter(|w| !w.trim().is_empty())
+        .or_else(|| id.rsplit_once('-').map(|(_, tail)| tail))
+        .unwrap_or("");
+    window_word(word)
+}
+
+/// A window length written the way the other providers write theirs.
+fn window_word(word: &str) -> String {
+    let lower = word.trim().to_lowercase();
+    match lower.as_str() {
+        "" => return String::new(),
+        "hourly" => return "1h".into(),
+        "daily" => return "1d".into(),
+        "weekly" => return "7d".into(),
+        "monthly" => return "30d".into(),
+        _ => {}
+    }
+
+    // Already a length the strip can print: 5h, 24h, 7d. `is_ascii` is what
+    // makes the split safe.
+    if lower.is_ascii() && lower.len() <= LABEL_MAX {
+        let (count, unit) = lower.split_at(lower.len() - 1);
+        if !count.is_empty()
+            && count.chars().all(|c| c.is_ascii_digit())
+            && matches!(unit, "h" | "d" | "m")
+        {
+            return lower;
+        }
+    }
+    shorten(&lower)
+}
+
+/// The family's initial and the window together, for a reading that holds more
+/// than one family and more than one window.
+fn family_window_label(row: &Naming) -> String {
+    let family = family_label(row);
+    let window = window_label(row);
+    // The first letter, not the first character: the family behind the Claude
+    // and GPT models is called `3p`, and `37d` reads as thirty seven days.
+    let initial = family
+        .chars()
+        .find(|c| c.is_alphabetic())
+        .or_else(|| family.chars().next());
+    match initial {
+        Some(initial) if !window.is_empty() => format!("{initial}{window}"),
+        _ => String::new(),
+    }
+}
+
+/// A word cut to the width the strip carries.
+fn shorten(word: &str) -> String {
+    let word = word.trim();
+    if word.is_empty() {
+        return String::new();
+    }
+    if word.chars().count() <= LABEL_MAX {
+        return word.to_uppercase();
+    }
+    let mut chars = word.chars();
     let head: String = chars
         .next()
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_default();
-    let tail: String = chars.take(2).collect::<String>().to_lowercase();
+    let tail: String = chars.take(LABEL_MAX - 1).collect::<String>().to_lowercase();
     format!("{head}{tail}")
 }
 
@@ -501,14 +640,88 @@ mod tests {
     }
 
     #[test]
+    fn two_windows_of_one_family_are_told_apart() {
+        // The report this came from: both rows read `Gem`, one resetting in a
+        // day and the other in two hours, so the widget claimed the same limit
+        // twice and showed neither.
+        let rows = [
+            ("gemini-5h", "Gemini Models", Some("5h")),
+            ("gemini-weekly", "Gemini Models", Some("weekly")),
+        ];
+        assert_eq!(label_all(&rows), vec!["5h", "7d"]);
+    }
+
+    #[test]
+    fn two_families_are_named_after_the_family() {
+        let rows = [
+            ("gemini-weekly", "Gemini Models", Some("weekly")),
+            ("3p-weekly", "Claude and GPT models", Some("weekly")),
+        ];
+        assert_eq!(label_all(&rows), vec!["Gem", "3P"]);
+    }
+
+    #[test]
+    fn families_and_windows_together_when_neither_alone_will_do() {
+        let rows = [
+            ("gemini-5h", "Gemini Models", Some("5h")),
+            ("gemini-weekly", "Gemini Models", Some("weekly")),
+            ("3p-weekly", "Claude and GPT models", Some("weekly")),
+        ];
+        assert_eq!(label_all(&rows), vec!["G5h", "G7d", "P7d"]);
+    }
+
+    #[test]
+    fn rows_that_cannot_be_told_apart_say_so() {
+        let rows = [("", "", None), ("", "", None)];
+        assert_eq!(label_all(&rows), vec!["#1", "#2"]);
+    }
+
+    #[test]
+    fn a_label_never_repeats_whatever_the_answer_holds() {
+        let rows = [
+            ("gemini-weekly", "Gemini Models", Some("weekly")),
+            ("gemini-weekly", "Gemini Models", Some("weekly")),
+        ];
+        let labels = label_all(&rows);
+        assert_eq!(labels.len(), 2);
+        assert_ne!(labels[0], labels[1]);
+    }
+
+    #[test]
     fn labels_are_short_enough_for_the_strip() {
-        assert_eq!(bucket_label("gemini-weekly", "Gemini Models"), "Gem");
-        assert_eq!(bucket_label("3p-weekly", "Claude and GPT models"), "3P");
-        assert_eq!(bucket_label("", "Gemini Models"), "Gem");
-        assert_eq!(bucket_label("", ""), "?");
-        assert_eq!(bucket_label("pro-5h", ""), "PRO");
-        for id in ["gemini-weekly", "3p-weekly", "", "pro-5h"] {
-            assert!(bucket_label(id, "Gemini Models").chars().count() <= 3);
+        assert_eq!(
+            family_label(&("gemini-weekly", "Gemini Models", None)),
+            "Gem"
+        );
+        assert_eq!(family_label(&("3p-weekly", "Claude and GPT", None)), "3P");
+        assert_eq!(family_label(&("", "Gemini Models", None)), "Gem");
+        assert_eq!(family_label(&("", "", None)), "");
+        assert_eq!(family_label(&("pro-5h", "", None)), "PRO");
+        assert_eq!(window_word("weekly"), "7d");
+        assert_eq!(window_word("5h"), "5h");
+        assert_eq!(window_word("monthly"), "30d");
+        assert_eq!(window_word("fortnightly"), "For");
+        // A single scheme can overrun: `gemini-2-5-pro-monthly` would read
+        // `G30d` under the third one. The width is the answer's promise, not
+        // any one scheme's, so it is asserted where the answer is made.
+        for ids in [
+            vec!["gemini-weekly"],
+            vec!["gemini-weekly", "3p-weekly"],
+            vec!["gemini-5h", "gemini-weekly"],
+            vec!["gemini-5h", "gemini-weekly", "3p-weekly"],
+            vec!["gemini-2-5-pro-monthly", "gemini-2-5-pro-weekly"],
+            vec!["", "pro-5h"],
+        ] {
+            let rows: Vec<Naming> = ids.iter().map(|id| (*id, "Gemini Models", None)).collect();
+            let labels = label_all(&rows);
+            assert_eq!(labels.len(), rows.len());
+            assert!(all_different(&labels), "{ids:?} produced {labels:?}");
+            for label in &labels {
+                assert!(
+                    !label.is_empty() && label.chars().count() <= LABEL_MAX,
+                    "{ids:?} produced {labels:?}"
+                );
+            }
         }
     }
 

@@ -21,8 +21,27 @@ const AUTOSTART_LABEL: &str = "Start at login";
 
 pub const TRAY_ID: &str = "main";
 
-/// The live menu, plus a signature of what it currently shows.
-pub struct MenuHandle(pub RwLock<Option<Menu<Wry>>>, pub RwLock<Option<String>>);
+/// The menus the app owns.
+///
+/// The tray's menu and the widget's context menu used to be one object shared
+/// between them. Showing a menu borrows it and swapping the tray's menu borrows
+/// it again, and nothing orders those two against each other: on Linux a popup
+/// is not modal and returns while it is still on screen, so a rebuild landing
+/// in that gap took a second borrow of the same object and aborted the process.
+/// A popup now gets a menu of its own that nothing else ever touches.
+pub struct MenuHandle {
+    /// Attached to the tray icon.
+    pub tray: RwLock<Option<Menu<Wry>>>,
+    /// A description of what `tray` currently shows.
+    pub signature: RwLock<Option<String>>,
+    /// Behind the last widget popup, kept alive for as long as it is displayed.
+    pub popup: RwLock<Option<Menu<Wry>>>,
+    /// The tray menu one generation back. A swap can land while the menu it
+    /// replaces is still being dismissed, and dropping the old object then
+    /// tears down GTK widgets out from under a menu that is on screen. Holding
+    /// it until the swap after next costs one menu's worth of memory.
+    pub retired: RwLock<Option<Menu<Wry>>>,
+}
 
 const ICON_GREEN: &[u8] = include_bytes!("../icons/tray-green.png");
 const ICON_AMBER: &[u8] = include_bytes!("../icons/tray-amber.png");
@@ -30,7 +49,12 @@ const ICON_RED: &[u8] = include_bytes!("../icons/tray-red.png");
 const ICON_GRAY: &[u8] = include_bytes!("../icons/tray-gray.png");
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    app.manage(MenuHandle(RwLock::new(None), RwLock::new(None)));
+    app.manage(MenuHandle {
+        tray: RwLock::new(None),
+        signature: RwLock::new(None),
+        popup: RwLock::new(None),
+        retired: RwLock::new(None),
+    });
 
     let menu = build_menu(app)?;
     let signature = menu_signature(app);
@@ -53,17 +77,25 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
 
     let state = app.state::<MenuHandle>();
-    state.0.write().replace(menu);
-    state.1.write().replace(signature);
+    state.tray.write().replace(menu);
+    state.signature.write().replace(signature);
     Ok(())
 }
 
-/// True while a context menu is on screen.
+/// Builds a menu for one popup on the widget.
 ///
-/// Showing a menu holds a mutable borrow of it for as long as it is displayed,
-/// and swapping the tray menu underneath takes a second borrow of the same
-/// object to detach the old one. That combination aborts the process, so
-/// rebuilds wait until the menu is dismissed.
+/// Deliberately not the tray's menu. See `MenuHandle`.
+pub fn build_popup_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    build_menu(app)
+}
+
+/// True while the widget's context menu is being shown.
+///
+/// Only meaningful where showing a menu blocks. On Windows the popup runs a
+/// modal loop and this covers the whole time the menu is up; on Linux the call
+/// returns immediately and this covers almost nothing, which is why the popup
+/// owns its menu outright rather than relying on this flag. It stays because it
+/// is still worth not swapping the tray menu mid modal loop on Windows.
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
 static REBUILD_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -125,18 +157,21 @@ pub fn rebuild(app: &AppHandle) {
         let signature = menu_signature(&handle);
         {
             let last = handle.state::<MenuHandle>();
-            if last.1.read().as_deref() == Some(signature.as_str()) {
+            if last.signature.read().as_deref() == Some(signature.as_str()) {
                 return;
             }
         }
 
-        let Ok(menu) = build_menu(&handle) else { return };
+        let Ok(menu) = build_menu(&handle) else {
+            return;
+        };
         if let Some(tray) = handle.tray_by_id(TRAY_ID) {
             let _ = tray.set_menu(Some(menu.clone()));
         }
         let state = handle.state::<MenuHandle>();
-        state.0.write().replace(menu);
-        state.1.write().replace(signature);
+        let previous = state.tray.write().replace(menu);
+        *state.retired.write() = previous;
+        state.signature.write().replace(signature);
     });
 }
 
@@ -235,6 +270,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 .checked(s.widget.taskbar_mode())
                 .build(app)?,
         );
+    } else {
+        // Listed and greyed rather than left out. A Placement submenu holding
+        // one placement reads as something that failed to load, and the first
+        // thing a Linux user asks is why the widget does not go in the panel
+        // the way it does on Windows. The answer belongs where the question is.
+        placement = placement.item(
+            &MenuItemBuilder::with_id("place:taskbar", "Pinned to taskbar (Windows only)")
+                .enabled(false)
+                .build(app)?,
+        );
     }
     let placement = placement.build()?;
 
@@ -272,9 +317,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 .clone()
                 .unwrap_or_else(|| "saved monitor".into());
             mon = mon.item(
-                &CheckMenuItemBuilder::with_id(format!("mon:{id}"), format!("(not connected) {name}"))
-                    .checked(true)
-                    .build(app)?,
+                &CheckMenuItemBuilder::with_id(
+                    format!("mon:{id}"),
+                    format!("(not connected) {name}"),
+                )
+                .checked(true)
+                .build(app)?,
             );
         }
     }
@@ -489,7 +537,10 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 .update(|s| s.widget.hide_on_fullscreen = !s.widget.hide_on_fullscreen);
         }
         "autostart" => {
-            let enabled = state.settings.update(|s| s.autostart = !s.autostart).autostart;
+            let enabled = state
+                .settings
+                .update(|s| s.autostart = !s.autostart)
+                .autostart;
             crate::autostart::apply(app, enabled);
         }
         "open_settings" => open_path(&crate::settings::settings_path()),
@@ -503,8 +554,13 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             return;
         }
         other => {
-            if let Some(secs) = other.strip_prefix("freq:").and_then(|v| v.parse::<u64>().ok()) {
-                state.settings.update(|s| s.polling.http_interval_secs = secs);
+            if let Some(secs) = other
+                .strip_prefix("freq:")
+                .and_then(|v| v.parse::<u64>().ok())
+            {
+                state
+                    .settings
+                    .update(|s| s.polling.http_interval_secs = secs);
                 state.request(Refresh::Settings);
             } else if let Some(mode) = other.strip_prefix("place:") {
                 let mode = mode.to_string();
@@ -513,7 +569,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 needs_config = true;
             } else if let Some(theme) = other.strip_prefix("theme:") {
                 let theme = theme.to_string();
-                state.settings.update(|s| s.appearance.theme = theme.clone());
+                state
+                    .settings
+                    .update(|s| s.appearance.theme = theme.clone());
                 needs_config = true;
             } else if let Some(mon_id) = other.strip_prefix("mon:") {
                 let mon_id = mon_id.to_string();
@@ -577,7 +635,9 @@ pub fn update_badge(app: &AppHandle, payload: &UsagePayload) {
         .providers
         .iter()
         .filter_map(|p| p.peak())
-        .fold(None, |acc: Option<f32>, v| Some(acc.map_or(v, |a| a.max(v))));
+        .fold(None, |acc: Option<f32>, v| {
+            Some(acc.map_or(v, |a| a.max(v)))
+        });
 
     let needs_attention = payload.providers.iter().any(|p| {
         matches!(
