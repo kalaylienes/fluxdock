@@ -522,6 +522,10 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 .settings
                 .update(|s| s.widget.compact_mode = !s.widget.compact_mode);
             needs_config = true;
+            // Compact mode decides how wide a pinned column is drawn, so the
+            // strip has to be measured again. Without this the setting took
+            // effect on the next thing that happened to move the widget.
+            needs_reposition = true;
         }
         "click_through" => {
             let now = state

@@ -61,10 +61,21 @@ pub const MAX_LOGICAL_H: f64 = 400.0;
 const MARGIN_X: f64 = 12.0;
 const MARGIN_Y: f64 = 8.0;
 
-/// Width of one provider column when pinned to the taskbar.
+/// Width of one provider column when pinned to the taskbar. What the content
+/// needs, which is not the same as what it deserves.
 const TASKBAR_COLUMN_W: f64 = 112.0;
 const TASKBAR_COLUMN_GAP: f64 = 16.0;
 const TASKBAR_PADDING: f64 = 12.0;
+
+/// How much wider than the minimum a column is drawn, by how many there are.
+///
+/// A single provider used to get a strip barely wider than its own logo, with a
+/// bar too short to read a percentage off, while the taskbar beside it sat
+/// empty: the width was one column's worth however much room there was going.
+/// Three columns already take as much of the strip as it can spare, so the
+/// extra tapers to nothing by then and the widest the widget has ever been
+/// stays the widest it can be. Anything past three is the plain column again.
+const TASKBAR_COLUMN_BONUS: [f64; 3] = [84.0, 28.0, 0.0];
 
 /// A rectangle in physical pixels.
 ///
@@ -459,10 +470,20 @@ pub fn taskbar_for(monitor: &MonitorInfo) -> Option<TaskbarInfo> {
 }
 
 /// Taskbar placement grows with the number of columns instead of reserving a
-/// fixed block of the strip.
-pub fn taskbar_width_logical(columns: usize) -> f64 {
-    let n = columns.max(1) as f64;
-    TASKBAR_PADDING + n * TASKBAR_COLUMN_W + (n - 1.0) * TASKBAR_COLUMN_GAP
+/// fixed block of the strip, and a column is given room to breathe while there
+/// are few enough of them to spare it.
+///
+/// Compact mode is a request for the small version, so it takes the plain
+/// column and the strip stays exactly the size it has always been.
+pub fn taskbar_width_logical(columns: usize, compact: bool) -> f64 {
+    let count = columns.max(1);
+    let bonus = if compact {
+        0.0
+    } else {
+        TASKBAR_COLUMN_BONUS.get(count - 1).copied().unwrap_or(0.0)
+    };
+    let n = count as f64;
+    TASKBAR_PADDING + n * (TASKBAR_COLUMN_W + bonus) + (n - 1.0) * TASKBAR_COLUMN_GAP
 }
 
 /// Left of the notification area, centred in the strip. A vertical taskbar
@@ -472,6 +493,7 @@ pub fn taskbar_position(
     bar: &TaskbarInfo,
     tray_gap_logical: i32,
     columns: usize,
+    compact: bool,
 ) -> Option<(i32, i32, i32, i32)> {
     if !bar.horizontal {
         return None;
@@ -479,7 +501,7 @@ pub fn taskbar_position(
     let scale = monitor.scale();
     let strip_h = bar.rect.bottom - bar.rect.top;
     let h = (strip_h - (4.0 * scale).round() as i32).max((24.0 * scale).round() as i32);
-    let w = (taskbar_width_logical(columns) * scale).round() as i32;
+    let w = (taskbar_width_logical(columns, compact) * scale).round() as i32;
     let gap = (tray_gap_logical as f64 * scale).round() as i32;
 
     Some((
@@ -1062,13 +1084,69 @@ pub(crate) mod tests {
 
     #[test]
     fn a_column_per_provider_widens_the_strip() {
-        let one = taskbar_width_logical(1);
-        let two = taskbar_width_logical(2);
-        let three = taskbar_width_logical(3);
+        let one = taskbar_width_logical(1, true);
+        let two = taskbar_width_logical(2, true);
+        let three = taskbar_width_logical(3, true);
         assert!(three > two && two > one);
         assert_eq!(three - two, two - one);
         // A count of zero is still one column wide rather than negative.
-        assert_eq!(taskbar_width_logical(0), one);
+        assert_eq!(taskbar_width_logical(0, true), one);
+    }
+
+    /// The complaint this came from: one provider pinned to the taskbar sat in
+    /// a strip too narrow to read, next to an empty stretch of taskbar.
+    #[test]
+    fn a_lone_provider_is_given_room_rather_than_the_minimum() {
+        let alone = taskbar_width_logical(1, false);
+        assert!(
+            alone > taskbar_width_logical(1, true),
+            "a single column got no more room than the content needs"
+        );
+        // Each provider added takes some of it back, so the strip never grows
+        // by a whole roomy column at a time.
+        let pair = taskbar_width_logical(2, false);
+        assert!(pair - alone < alone - TASKBAR_PADDING);
+    }
+
+    /// The strip is a guest in the notification area, so a widget showing
+    /// everything must not be wider than the one that already fitted.
+    #[test]
+    fn a_full_strip_is_no_wider_than_it_has_always_been() {
+        for columns in 3..=6 {
+            assert_eq!(
+                taskbar_width_logical(columns, false),
+                taskbar_width_logical(columns, true),
+                "{columns} columns claimed extra room"
+            );
+        }
+    }
+
+    /// Compact mode is the small version and has to stay the size it was.
+    #[test]
+    fn compact_mode_keeps_the_strip_it_had() {
+        for columns in 1..=4 {
+            let n = columns.max(1) as f64;
+            let plain =
+                TASKBAR_PADDING + n * TASKBAR_COLUMN_W + (n - 1.0) * TASKBAR_COLUMN_GAP;
+            assert_eq!(taskbar_width_logical(columns, true), plain);
+        }
+    }
+
+    /// Two providers are wider than one and three than two, whichever mode is
+    /// on. A strip that shrank when a provider was switched on would read as a
+    /// bug however well the arithmetic behind it was meant.
+    #[test]
+    fn the_strip_never_narrows_when_a_provider_is_added() {
+        for compact in [false, true] {
+            for columns in 1..6 {
+                assert!(
+                    taskbar_width_logical(columns + 1, compact)
+                        > taskbar_width_logical(columns, compact),
+                    "{columns} to {} narrowed with compact={compact}",
+                    columns + 1
+                );
+            }
+        }
     }
 
     #[test]

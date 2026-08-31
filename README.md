@@ -20,7 +20,10 @@ both GitHub themes.</sub>
 
 <sub>Pinned placement. The same numbers as one column per tool, sized to sit
 inside the taskbar strip. The strip widens as tools are added rather than
-reserving a fixed block of it.</sub>
+reserving a fixed block of it, and by less each time: one tool on its own gets
+a column wide enough to read rather than the narrowest one that fits, and by
+the third the strip is as wide as it goes. Compact mode takes the narrow
+columns throughout.</sub>
 
 ## Why
 
@@ -45,7 +48,8 @@ reset, so the question is answered before you ask it.
   confused.
 - **Two placements.** A floating window that docks to the corner of the work
   area, or pinned into the taskbar strip left of the notification area. Switch
-  from the tray menu.
+  from the tray menu. The strip takes only the width its columns need, and
+  spends what the taskbar can spare on the ones it has.
 - **Stays where you put it.** Monitor identity is stored, not coordinates, so
   unplugging a display, sleeping, or changing scaling does not strand the widget
   off screen.

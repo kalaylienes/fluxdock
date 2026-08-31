@@ -163,7 +163,13 @@ pub fn reposition(app: &AppHandle) {
                         return;
                     }
                     let columns = s.providers.enabled_count();
-                    let target = monitor::taskbar_position(&mon, &bar, s.widget.tray_gap, columns);
+                    let target = monitor::taskbar_position(
+                        &mon,
+                        &bar,
+                        s.widget.tray_gap,
+                        columns,
+                        s.widget.compact_mode,
+                    );
                     if target.is_none() {
                         // A vertical strip cannot host the layout at all, so
                         // this one is a real, lasting incompatibility.
